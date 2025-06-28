@@ -185,27 +185,104 @@
 // }
 
 
-// client/src/app/api/download-proxy/[...slug]/route.ts
-import { NextRequest } from 'next/server';
+// // client/src/app/api/download-proxy/[...slug]/route.ts
+// import { NextRequest } from 'next/server';
+
+// export async function GET(
+//   request: NextRequest,
+//   { params }: { params: { slug: string[] } }
+// ) {
+//   const { slug } = await params; // <-- FIX: Await params
+  
+//   const backendApiUrl = process.env.NEXT_PUBLIC_API_URL;
+//   // ... rest of the function is correct
+//   if (!backendApiUrl) {
+//     return new Response("Backend API URL is not configured.", { status: 500 });
+//   }
+
+//   let backendUrl: string;
+
+//   if (slug.length === 2 && slug[0] === 'zip') {
+//     const groupId = slug[1];
+//     backendUrl = `${backendApiUrl}/files/download-zip/${groupId}`;
+//   }
+//   else if (slug.length === 1) {
+//     const fileUniqueId = slug[0];
+//     backendUrl = `${backendApiUrl}/files/download/${fileUniqueId}`;
+//   }
+//   else {
+//     return new Response("Invalid download path.", { status: 400 });
+//   }
+
+//   try {
+//     const backendResponse = await fetch(backendUrl);
+
+//     if (!backendResponse.ok) {
+//       return new Response(backendResponse.body, {
+//         status: backendResponse.status,
+//         statusText: backendResponse.statusText,
+//       });
+//     }
+
+//     const headers = new Headers();
+//     const contentDisposition = backendResponse.headers.get('Content-Disposition');
+//     const contentType = backendResponse.headers.get('Content-Type');
+//     const contentLength = backendResponse.headers.get('Content-Length');
+
+//     if (contentDisposition) {
+//       headers.set('Content-Disposition', contentDisposition);
+//     }
+//     if (contentType) {
+//       headers.set('Content-Type', contentType);
+//     }
+//     if (contentLength) {
+//       headers.set('Content-Length', contentLength);
+//     }
+    
+//     return new Response(backendResponse.body, {
+//       status: 200,
+//       headers: headers,
+//     });
+
+//   } catch (error) {
+//     console.error("Download proxy error:", error);
+//     return new Response("Internal Server Error", { status: 500 });
+//   }
+// }
+
+// /client/src/app/api/download-proxy/[...slug]/route.ts
+
+import { NextRequest, NextResponse } from 'next/server';
+
+// This is the new, correct type for the second argument in a dynamic API route.
+interface RouteContext {
+  params: {
+    slug: string[];
+  };
+}
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { slug: string[] } }
+  context: RouteContext // FIX: Use the new context type here
 ) {
-  const { slug } = await params; // <-- FIX: Await params
-  
+  // Destructure `params` from the `context` object.
+  const { params } = context;
+  const { slug } = params;
+
   const backendApiUrl = process.env.NEXT_PUBLIC_API_URL;
-  // ... rest of the function is correct
+
   if (!backendApiUrl) {
     return new Response("Backend API URL is not configured.", { status: 500 });
   }
 
   let backendUrl: string;
 
+  // Handles /api/download-proxy/zip/[groupId]
   if (slug.length === 2 && slug[0] === 'zip') {
     const groupId = slug[1];
     backendUrl = `${backendApiUrl}/files/download-zip/${groupId}`;
   }
+  // Handles /api/download-proxy/[fileUniqueId]
   else if (slug.length === 1) {
     const fileUniqueId = slug[0];
     backendUrl = `${backendApiUrl}/files/download/${fileUniqueId}`;
@@ -218,12 +295,14 @@ export async function GET(
     const backendResponse = await fetch(backendUrl);
 
     if (!backendResponse.ok) {
-      return new Response(backendResponse.body, {
+      const errorBody = await backendResponse.text();
+      return new Response(errorBody, {
         status: backendResponse.status,
         statusText: backendResponse.statusText,
       });
     }
 
+    // Create a new Headers object to forward the correct download headers.
     const headers = new Headers();
     const contentDisposition = backendResponse.headers.get('Content-Disposition');
     const contentType = backendResponse.headers.get('Content-Type');
@@ -238,7 +317,8 @@ export async function GET(
     if (contentLength) {
       headers.set('Content-Length', contentLength);
     }
-    
+
+    // Stream the body from the backend directly to the client.
     return new Response(backendResponse.body, {
       status: 200,
       headers: headers,
