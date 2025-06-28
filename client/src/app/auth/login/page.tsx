@@ -213,7 +213,6 @@ export default function LoginPage() {
             </form>
           </Form>
           <div className="mt-4 text-center text-sm">
-            {/* FIX: Use ' for the apostrophe */}
             Don't have an account?{" "}
             <Link href="/auth/register" className="underline">
               Sign up
