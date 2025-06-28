@@ -254,14 +254,15 @@
 
 // /client/src/app/api/download-proxy/[...slug]/route.ts
 
+import { NextRequest } from 'next/server';
+
 /**
- * This is the canonical signature for a dynamic API Route as per the official Next.js documentation.
- * - It uses the standard Web API `Request` object.
- * - It destructures `{ params }` directly in the function's second argument.
- * - It provides an inline type for the destructured object.
+ * This is the canonical signature for a dynamic CATCH-ALL API Route as per Next.js docs.
+ * The second argument is an object containing `params`, which is NOT a promise for catch-all routes.
+ * We destructure `{ params }` directly in the function signature and type it inline.
  */
 export async function GET(
-  request: Request,
+  request: NextRequest,
   { params }: { params: { slug: string[] } }
 ) {
   // `params` is now correctly available, so we can destructure `slug`.
