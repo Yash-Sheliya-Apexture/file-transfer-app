@@ -252,9 +252,10 @@
 
 // /client/src/app/api/download-proxy/[...slug]/route.ts
 
-import { NextRequest, NextResponse } from 'next/server';
+// FIX: Removed 'NextResponse' as it is not used.
+import { NextRequest } from 'next/server';
 
-// This is the new, correct type for the second argument in a dynamic API route.
+// This is the correct type for the second argument in a dynamic API route.
 interface RouteContext {
   params: {
     slug: string[];
@@ -263,9 +264,8 @@ interface RouteContext {
 
 export async function GET(
   request: NextRequest,
-  context: RouteContext // FIX: Use the new context type here
+  context: RouteContext
 ) {
-  // Destructure `params` from the `context` object.
   const { params } = context;
   const { slug } = params;
 
@@ -302,7 +302,6 @@ export async function GET(
       });
     }
 
-    // Create a new Headers object to forward the correct download headers.
     const headers = new Headers();
     const contentDisposition = backendResponse.headers.get('Content-Disposition');
     const contentType = backendResponse.headers.get('Content-Type');
