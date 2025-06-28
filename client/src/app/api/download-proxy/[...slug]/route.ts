@@ -254,27 +254,26 @@
 
 import { NextRequest } from 'next/server';
 
-export async function GET(
-  request: NextRequest,
-  { params }: { params: { slug: string[] } }
-): Promise<Response> {
-  const { slug } = params;
-
+export async function GET(request: NextRequest): Promise<Response> {
   const backendApiUrl = process.env.NEXT_PUBLIC_API_URL;
 
   if (!backendApiUrl) {
     return new Response("Backend API URL is not configured.", { status: 500 });
   }
 
+  // Extract slug from URL pathname
+  // Example: /api/download-proxy/zip/123 -> ['zip', '123']
+  const slug = request.nextUrl.pathname
+    .replace(/^\/api\/download-proxy\//, '')
+    .split('/')
+    .filter(Boolean);
+
   let backendUrl: string;
 
-  // Handles /api/download-proxy/zip/[groupId]
   if (slug.length === 2 && slug[0] === 'zip') {
     const groupId = slug[1];
     backendUrl = `${backendApiUrl}/files/download-zip/${groupId}`;
-  }
-  // Handles /api/download-proxy/[fileUniqueId]
-  else if (slug.length === 1) {
+  } else if (slug.length === 1) {
     const fileUniqueId = slug[0];
     backendUrl = `${backendApiUrl}/files/download/${fileUniqueId}`;
   } else {
