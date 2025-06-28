@@ -429,7 +429,181 @@
 //   );
 // }
 
-// client/src/app/download/[groupId]/page.tsx
+// // client/src/app/download/[groupId]/page.tsx
+
+// "use client";
+
+// import { useEffect, useState, use } from 'react';
+// import { Button } from "@/components/ui/button";
+// import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+// import { formatBytes } from "@/utils/format";
+// import { Download, File as FileIcon, FileWarning, Loader2, Package, Save, RefreshCw } from "lucide-react";
+// import { toast } from 'sonner';
+
+// interface FileMetadata {
+//   originalName: string;
+//   size: number;
+//   uniqueId: string;
+// }
+// interface ResolvedParams {
+//   groupId: string;
+// }
+// interface DownloadPageProps {
+//   params: Promise<ResolvedParams>;
+// }
+
+// export default function DownloadGroupPage({ params }: DownloadPageProps) {
+//   const { groupId } = use(params);
+
+//   const [files, setFiles] = useState<FileMetadata[]>([]);
+//   const [isLoading, setIsLoading] = useState(true);
+//   const [error, setError] = useState<string | null>(null);
+//   // ADD a new state for the zipping process
+//   const [isZipping, setIsZipping] = useState(false);
+
+//   useEffect(() => {
+//     // ... (useEffect logic is correct and remains the same)
+//     if (!groupId) {
+//       setError("No Group ID provided in the URL.");
+//       setIsLoading(false);
+//       return;
+//     }
+//     const fetchGroupMetadata = async () => {
+//       const apiUrl = `/api/files/group-meta/${groupId}`;
+//       try {
+//         const res = await fetch(apiUrl);
+//         if (!res.ok) {
+//           const errorData = await res.json().catch(() => ({ message: "File group not found." }));
+//           throw new Error(errorData.message);
+//         }
+//         const data: FileMetadata[] = await res.json();
+//         if (data.length === 0) {
+//             throw new Error("This link is valid, but contains no files.");
+//         }
+//         setFiles(data);
+//       } catch (err: any) {
+//         setError(err.message);
+//       } finally {
+//         setIsLoading(false);
+//       }
+//     };
+//     fetchGroupMetadata();
+//   }, [groupId]);
+
+//   const handleDownload = (fileUniqueId: string, fileName: string) => {
+//     // ... (this function is correct)
+//     const downloadProxyUrl = `/api/download-proxy/${fileUniqueId}`;
+//     const link = document.createElement('a');
+//     link.href = downloadProxyUrl;
+//     link.setAttribute('download', fileName);
+//     document.body.appendChild(link);
+//     link.click();
+//     document.body.removeChild(link);
+//   };
+
+//   // UPDATE this function to handle the new UI state
+//   const handleDownloadAll = async () => {
+//     setIsZipping(true);
+//     toast.info("Preparing your ZIP file...", {
+//         description: "This may take a moment for large files."
+//     });
+
+//     const downloadProxyUrl = `/api/download-proxy/zip/${groupId}`;
+    
+//     try {
+//         // We fetch the URL instead of redirecting. This allows us to know when it's done or fails.
+//         const response = await fetch(downloadProxyUrl);
+
+//         if (!response.ok) {
+//             throw new Error('Server failed to create the ZIP file.');
+//         }
+
+//         const blob = await response.blob();
+//         const url = window.URL.createObjectURL(blob);
+//         const link = document.createElement('a');
+//         link.href = url;
+        
+//         // Extract filename from headers or create a default one
+//         const disposition = response.headers.get('content-disposition');
+//         let filename = 'download.zip';
+//         if (disposition && disposition.indexOf('attachment') !== -1) {
+//             const filenameRegex = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/;
+//             const matches = filenameRegex.exec(disposition);
+//             if (matches != null && matches[1]) {
+//             filename = matches[1].replace(/['"]/g, '');
+//             }
+//         }
+        
+//         link.setAttribute('download', filename);
+//         document.body.appendChild(link);
+//         link.click();
+//         document.body.removeChild(link);
+//         window.URL.revokeObjectURL(url); // Clean up memory
+
+//     } catch (err) {
+//         console.error("Failed to download ZIP:", err);
+//         toast.error("Download failed", {
+//             description: "Could not create the ZIP file. Please try again later."
+//         });
+//     } finally {
+//         setIsZipping(false);
+//     }
+//   };
+
+//   // --- Rendering Logic ---
+
+//   if (isLoading) {
+//     // ... (this is correct)
+//     return <div className="flex min-h-screen items-center justify-center"><Loader2 className="h-8 w-8 animate-spin" /></div>;
+//   }
+
+//   if (error || files.length === 0) {
+//     // ... (this is correct)
+//     return <div className="flex min-h-screen items-center justify-center p-4"><Card className="w-full max-w-md text-center"><CardHeader><CardTitle className="text-destructive">Error</CardTitle><CardDescription>{error || "This link is invalid or has expired."}</CardDescription></CardHeader></Card></div>;
+//   }
+  
+//   const totalSize = files.reduce((acc, file) => acc + file.size, 0);
+
+//   return (
+//     <div className="flex min-h-screen items-center justify-center bg-gray-100 p-4">
+//       <Card className="w-full max-w-lg">
+//         <CardHeader>
+//           <CardTitle className="flex items-center gap-2"><Package size={28}/> File Batch</CardTitle>
+//           <CardDescription>
+//             This link contains {files.length} file(s) with a total size of {formatBytes(totalSize)}.
+//           </CardDescription>
+//         </CardHeader>
+//         <CardContent className="space-y-4">
+//             <div className="space-y-2 max-h-60 overflow-y-auto rounded-md border p-2">
+//                 {files.map(file => (
+//                     <div key={file.uniqueId} className="flex items-center justify-between p-2 hover:bg-muted/50 rounded-md">
+//                         <div className="flex items-center gap-3 overflow-hidden">
+//                             <FileIcon className="h-5 w-5 flex-shrink-0 text-muted-foreground"/>
+//                             <div className='overflow-hidden'>
+//                                 <p className="font-medium text-sm truncate" title={file.originalName}>{file.originalName}</p>
+//                                 <p className="text-xs text-muted-foreground">{formatBytes(file.size)}</p>
+//                             </div>
+//                         </div>
+//                         <Button size="sm" variant="ghost" onClick={() => handleDownload(file.uniqueId, file.originalName)}>
+//                            <Download className="h-4 w-4"/>
+//                         </Button>
+//                     </div>
+//                 ))}
+//             </div>
+          
+//           {/* UPDATE the button to show the zipping state */}
+//           <Button className="w-full h-12 text-md" onClick={handleDownloadAll} disabled={isZipping}>
+//             {isZipping ? (
+//                 <><RefreshCw className="mr-2 h-5 w-5 animate-spin" /> Preparing ZIP...</>
+//             ) : (
+//                 <><Save className="mr-2 h-5 w-5" /> Download All (.zip)</>
+//             )}
+//           </Button>
+//         </CardContent>
+//       </Card>
+//     </div>
+//   );
+// }
 
 "use client";
 
@@ -437,7 +611,8 @@ import { useEffect, useState, use } from 'react';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatBytes } from "@/utils/format";
-import { Download, File as FileIcon, FileWarning, Loader2, Package, Save, RefreshCw } from "lucide-react";
+// FIX: Removed unused FileWarning import
+import { Download, File as FileIcon, Loader2, Package, Save, RefreshCw } from "lucide-react";
 import { toast } from 'sonner';
 
 interface FileMetadata {
@@ -458,11 +633,9 @@ export default function DownloadGroupPage({ params }: DownloadPageProps) {
   const [files, setFiles] = useState<FileMetadata[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  // ADD a new state for the zipping process
   const [isZipping, setIsZipping] = useState(false);
 
   useEffect(() => {
-    // ... (useEffect logic is correct and remains the same)
     if (!groupId) {
       setError("No Group ID provided in the URL.");
       setIsLoading(false);
@@ -478,11 +651,12 @@ export default function DownloadGroupPage({ params }: DownloadPageProps) {
         }
         const data: FileMetadata[] = await res.json();
         if (data.length === 0) {
-            throw new Error("This link is valid, but contains no files.");
+          throw new Error("This link is valid, but contains no files.");
         }
         setFiles(data);
-      } catch (err: any) {
-        setError(err.message);
+      } catch (err) { // FIX: Type the error
+        const error = err as Error;
+        setError(error.message);
       } finally {
         setIsLoading(false);
       }
@@ -491,7 +665,6 @@ export default function DownloadGroupPage({ params }: DownloadPageProps) {
   }, [groupId]);
 
   const handleDownload = (fileUniqueId: string, fileName: string) => {
-    // ... (this function is correct)
     const downloadProxyUrl = `/api/download-proxy/${fileUniqueId}`;
     const link = document.createElement('a');
     link.href = downloadProxyUrl;
@@ -501,64 +674,21 @@ export default function DownloadGroupPage({ params }: DownloadPageProps) {
     document.body.removeChild(link);
   };
 
-  // UPDATE this function to handle the new UI state
-  const handleDownloadAll = async () => {
-    setIsZipping(true);
-    toast.info("Preparing your ZIP file...", {
-        description: "This may take a moment for large files."
+  const handleDownloadAll = () => {
+    if (files.length === 0) return;
+    const delayBetweenDownloads = 300;
+    files.forEach((file, index) => {
+      setTimeout(() => {
+        handleDownload(file.uniqueId, file.originalName);
+      }, index * delayBetweenDownloads);
     });
-
-    const downloadProxyUrl = `/api/download-proxy/zip/${groupId}`;
-    
-    try {
-        // We fetch the URL instead of redirecting. This allows us to know when it's done or fails.
-        const response = await fetch(downloadProxyUrl);
-
-        if (!response.ok) {
-            throw new Error('Server failed to create the ZIP file.');
-        }
-
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        
-        // Extract filename from headers or create a default one
-        const disposition = response.headers.get('content-disposition');
-        let filename = 'download.zip';
-        if (disposition && disposition.indexOf('attachment') !== -1) {
-            const filenameRegex = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/;
-            const matches = filenameRegex.exec(disposition);
-            if (matches != null && matches[1]) {
-            filename = matches[1].replace(/['"]/g, '');
-            }
-        }
-        
-        link.setAttribute('download', filename);
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        window.URL.revokeObjectURL(url); // Clean up memory
-
-    } catch (err) {
-        console.error("Failed to download ZIP:", err);
-        toast.error("Download failed", {
-            description: "Could not create the ZIP file. Please try again later."
-        });
-    } finally {
-        setIsZipping(false);
-    }
   };
 
-  // --- Rendering Logic ---
-
   if (isLoading) {
-    // ... (this is correct)
     return <div className="flex min-h-screen items-center justify-center"><Loader2 className="h-8 w-8 animate-spin" /></div>;
   }
 
   if (error || files.length === 0) {
-    // ... (this is correct)
     return <div className="flex min-h-screen items-center justify-center p-4"><Card className="w-full max-w-md text-center"><CardHeader><CardTitle className="text-destructive">Error</CardTitle><CardDescription>{error || "This link is invalid or has expired."}</CardDescription></CardHeader></Card></div>;
   }
   
@@ -591,13 +721,9 @@ export default function DownloadGroupPage({ params }: DownloadPageProps) {
                 ))}
             </div>
           
-          {/* UPDATE the button to show the zipping state */}
-          <Button className="w-full h-12 text-md" onClick={handleDownloadAll} disabled={isZipping}>
-            {isZipping ? (
-                <><RefreshCw className="mr-2 h-5 w-5 animate-spin" /> Preparing ZIP...</>
-            ) : (
-                <><Save className="mr-2 h-5 w-5" /> Download All (.zip)</>
-            )}
+          <Button className="w-full h-12 text-md" onClick={handleDownloadAll}>
+            <Download className="mr-2 h-5 w-5" />
+            Download All
           </Button>
         </CardContent>
       </Card>
