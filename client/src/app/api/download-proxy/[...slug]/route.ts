@@ -252,21 +252,17 @@
 
 
 
-// /client/src/app/api/download-proxy/[...slug]/route.ts
-
 import { NextRequest } from 'next/server';
 
-/**
- * This is the canonical signature for a dynamic CATCH-ALL API Route as per Next.js docs.
- * The second argument is an object containing `params`, which is NOT a promise for catch-all routes.
- * We destructure `{ params }` directly in the function signature and type it inline.
- */
 export async function GET(
   request: NextRequest,
-  { params }: { params: { slug: string[] } }
+  context: { params?: { slug?: string[] } }
 ) {
-  // `params` is now correctly available, so we can destructure `slug`.
-  const { slug } = params;
+  const slug = context.params?.slug;
+
+  if (!slug) {
+    return new Response("Missing slug.", { status: 400 });
+  }
 
   const backendApiUrl = process.env.NEXT_PUBLIC_API_URL;
 
@@ -276,17 +272,13 @@ export async function GET(
 
   let backendUrl: string;
 
-  // Handles /api/download-proxy/zip/[groupId]
   if (slug.length === 2 && slug[0] === 'zip') {
     const groupId = slug[1];
     backendUrl = `${backendApiUrl}/files/download-zip/${groupId}`;
-  }
-  // Handles /api/download-proxy/[fileUniqueId]
-  else if (slug.length === 1) {
+  } else if (slug.length === 1) {
     const fileUniqueId = slug[0];
     backendUrl = `${backendApiUrl}/files/download/${fileUniqueId}`;
-  }
-  else {
+  } else {
     return new Response("Invalid download path.", { status: 400 });
   }
 
@@ -316,7 +308,6 @@ export async function GET(
       headers.set('Content-Length', contentLength);
     }
 
-    // Stream the body from the backend directly to the client.
     return new Response(backendResponse.body, {
       status: 200,
       headers: headers,
