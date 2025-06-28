@@ -1,0 +1,35 @@
+# Dependencies
+/node_modules
+
+# Local Environment Variables
+# Never commit this file! It contains secrets for your database, JWT, etc.
+.env
+
+# Service Account Key
+# CRITICAL: Never commit your Google Service Account key to a public repository.
+/src/config/service-account-key.json
+
+# Log files
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Other
+/coverage
+.DS_Store
+*.pem
+
+# Editor directories and files
+.idea
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
