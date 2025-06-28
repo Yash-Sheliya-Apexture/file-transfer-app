@@ -256,13 +256,12 @@ import { NextRequest } from 'next/server';
 
 export async function GET(
   request: NextRequest,
-  context: { params?: { slug?: string[] } }
+  { params }: { params: { [key: string]: string | string[] } }
 ) {
-  const slug = context.params?.slug;
+  const slugParam = params['slug'];
 
-  if (!slug) {
-    return new Response("Missing slug.", { status: 400 });
-  }
+  // Convert string to array if needed
+  const slug = Array.isArray(slugParam) ? slugParam : [slugParam];
 
   const backendApiUrl = process.env.NEXT_PUBLIC_API_URL;
 
