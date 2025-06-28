@@ -350,7 +350,7 @@ export default function HistoryPage() {
           <FileWarning className="w-12 h-12 text-muted-foreground mb-4" />
           <p className="text-lg font-semibold">No Files Found</p>
           <p className="text-sm text-muted-foreground">
-            You haven't uploaded any files yet. Go to the home page to start
+            You haven′t uploaded any files yet. Go to the home page to start
             sharing!
           </p>
         </div>
@@ -404,7 +404,7 @@ export default function HistoryPage() {
         <CardHeader>
           <CardTitle>Upload History</CardTitle>
           <CardDescription>
-            Here is a list of all the files you've uploaded.
+            Here is a list of all the files you′ve uploaded.
           </CardDescription>
         </CardHeader>
         <CardContent>{renderContent()}</CardContent>
