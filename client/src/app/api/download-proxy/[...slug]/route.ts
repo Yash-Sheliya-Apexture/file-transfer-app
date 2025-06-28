@@ -249,22 +249,20 @@
 //     return new Response("Internal Server Error", { status: 500 });
 //   }
 // }
-
 // /client/src/app/api/download-proxy/[...slug]/route.ts
 
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 
 /**
  * This is the final and correct signature for a dynamic API route in modern Next.js.
- * We accept a `context` object as the second argument and provide its type inline.
- * We then destructure `params` from this `context` object inside the function body.
+ * We destructure `params` directly in the function's second argument and provide its type.
  * This is the most explicit and stable pattern that the Vercel build system will accept.
  */
 export async function GET(
   request: NextRequest,
-  context: { params: { slug: string[] } }
+  { params }: { params: { slug: string[] } }
 ) {
-  const { slug } = context.params;
+  const { slug } = params;
 
   const backendApiUrl = process.env.NEXT_PUBLIC_API_URL;
 
