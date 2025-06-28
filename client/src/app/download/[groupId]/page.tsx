@@ -6,7 +6,13 @@
 // async function getFileMetadata(uniqueId: string) {
 //     // This fetch is server-side
 //     // NOTE: This assumes your file model will be expanded to return metadata without the file itself
-//     // We'll mock this for now, as creating a separate metadata endpoint is an extra step.
+//     // We'll mock this for now, as creating a separa
+// 
+// 
+// 
+// 
+// 
+// te metadata endpoint is an extra step.
 //     // In a real app, you'd fetch from `http://localhost:5000/api/files/meta/${uniqueId}`
 //     return {
 //         name: "example_file.zip",
@@ -611,9 +617,9 @@ import { useEffect, useState, use } from 'react';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatBytes } from "@/utils/format";
-// FIX: Removed unused FileWarning import
-import { Download, File as FileIcon, Loader2, Package, Save, RefreshCw } from "lucide-react";
-import { toast } from 'sonner';
+// FIX: Removed unused imports: Save, RefreshCw, FileWarning
+import { Download, File as FileIcon, Loader2, Package } from "lucide-react";
+// FIX: Removed unused toast import
 
 interface FileMetadata {
   originalName: string;
@@ -633,7 +639,8 @@ export default function DownloadGroupPage({ params }: DownloadPageProps) {
   const [files, setFiles] = useState<FileMetadata[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [isZipping, setIsZipping] = useState(false);
+  // FIX: Removed unused state variables for zipping
+  // const [isZipping, setIsZipping] = useState(false);
 
   useEffect(() => {
     if (!groupId) {
@@ -654,7 +661,7 @@ export default function DownloadGroupPage({ params }: DownloadPageProps) {
           throw new Error("This link is valid, but contains no files.");
         }
         setFiles(data);
-      } catch (err) { // FIX: Type the error
+      } catch (err) {
         const error = err as Error;
         setError(error.message);
       } finally {
@@ -689,7 +696,18 @@ export default function DownloadGroupPage({ params }: DownloadPageProps) {
   }
 
   if (error || files.length === 0) {
-    return <div className="flex min-h-screen items-center justify-center p-4"><Card className="w-full max-w-md text-center"><CardHeader><CardTitle className="text-destructive">Error</CardTitle><CardDescription>{error || "This link is invalid or has expired."}</CardDescription></CardHeader></Card></div>;
+    // We need to add FileWarning back to the import if we use it here.
+    // For now, let's just display the text error.
+    return (
+      <div className="flex min-h-screen items-center justify-center p-4">
+        <Card className="w-full max-w-md text-center">
+          <CardHeader>
+            <CardTitle className="text-destructive">Error</CardTitle>
+            <CardDescription>{error || "This link is invalid or has expired."}</CardDescription>
+          </CardHeader>
+        </Card>
+      </div>
+    );
   }
   
   const totalSize = files.reduce((acc, file) => acc + file.size, 0);

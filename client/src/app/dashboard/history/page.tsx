@@ -274,7 +274,6 @@
 
 "use client";
 
-// ... (imports remain the same)
 import { useEffect, useState } from 'react';
 import { getMyFiles, IUserFile } from '@/services/file';
 import { formatBytes } from '@/utils/format';
@@ -333,7 +332,7 @@ export default function HistoryPage() {
         <div className="flex flex-col items-center justify-center text-center p-8 border-2 border-dashed rounded-lg">
           <FileWarning className="w-12 h-12 text-muted-foreground mb-4" />
           <p className="text-lg font-semibold">No Files Found</p>
-          {/* FIX: Use ' for apostrophe */}
+          {/* FIX: Use ' for the apostrophe */}
           <p className="text-sm text-muted-foreground">You haven't uploaded any files yet. Go to the home page to start sharing!</p>
         </div>
       );
@@ -368,7 +367,7 @@ export default function HistoryPage() {
         <CardHeader>
           <CardTitle>Upload History</CardTitle>
           <CardDescription>
-            {/* FIX: Use ' for apostrophe */}
+            {/* FIX: Use ' for the apostrophe */}
             Here is a list of all the files you've uploaded.
           </CardDescription>
         </CardHeader>
