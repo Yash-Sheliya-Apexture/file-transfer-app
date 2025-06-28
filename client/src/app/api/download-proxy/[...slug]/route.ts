@@ -252,21 +252,18 @@
 
 // /client/src/app/api/download-proxy/[...slug]/route.ts
 
-// FIX: Removed 'NextResponse' as it is not used.
 import { NextRequest } from 'next/server';
 
-// This is the correct type for the second argument in a dynamic API route.
-interface RouteContext {
-  params: {
-    slug: string[];
-  };
-}
-
+/**
+ * This is the final and correct signature for a dynamic API route in Next.js 14/15.
+ * The second argument is an object that contains `params`, and we destructure it directly
+ * in the function definition.
+ */
 export async function GET(
   request: NextRequest,
-  context: RouteContext
+  { params }: { params: { slug: string[] } }
 ) {
-  const { params } = context;
+  // `params` is now directly available, and `slug` can be destructured from it.
   const { slug } = params;
 
   const backendApiUrl = process.env.NEXT_PUBLIC_API_URL;
