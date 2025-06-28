@@ -255,17 +255,16 @@
 import { NextRequest } from 'next/server';
 
 /**
- * This is the final and correct signature for a dynamic API route in Next.js.
- * The second argument is an object containing `params`, and we destructure `params`
- * from it while providing its type inline. This is the exact pattern the
- * Next.js build compiler is looking for.
+ * This is the final and correct signature for a dynamic API route in modern Next.js.
+ * We accept a `context` object as the second argument and provide its type inline.
+ * We then destructure `params` from this `context` object inside the function body.
+ * This is the most explicit and stable pattern that the Vercel build system will accept.
  */
 export async function GET(
   request: NextRequest,
-  { params }: { params: { slug: string[] } }
+  context: { params: { slug: string[] } }
 ) {
-  // `params` is now correctly typed and available, so we can get the slug.
-  const { slug } = params;
+  const { slug } = context.params;
 
   const backendApiUrl = process.env.NEXT_PUBLIC_API_URL;
 
