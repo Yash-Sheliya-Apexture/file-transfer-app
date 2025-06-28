@@ -254,25 +254,18 @@
 
 // /client/src/app/api/download-proxy/[...slug]/route.ts
 
-import { NextRequest } from 'next/server';
-
-// Define the context type explicitly for clarity and to potentially help the build system.
-interface RouteContext {
-  params: {
-    slug: string[];
-  };
-}
-
 /**
- * This is the final and correct signature for a dynamic API route in modern Next.js.
- * We are using a named interface for the context object's type.
- * This can sometimes resolve build issues with more complex or picky TypeScript configurations.
+ * This is the canonical signature for a dynamic API Route as per the official Next.js documentation.
+ * - It uses the standard Web API `Request` object.
+ * - It destructures `{ params }` directly in the function's second argument.
+ * - It provides an inline type for the destructured object.
  */
 export async function GET(
-  request: NextRequest,
-  context: RouteContext
+  request: Request,
+  { params }: { params: { slug: string[] } }
 ) {
-  const { slug } = context.params;
+  // `params` is now correctly available, so we can destructure `slug`.
+  const { slug } = params;
 
   const backendApiUrl = process.env.NEXT_PUBLIC_API_URL;
 
