@@ -249,14 +249,18 @@
 //     return new Response("Internal Server Error", { status: 500 });
 //   }
 // }
+
+
+
 // /client/src/app/api/download-proxy/[...slug]/route.ts
 
-import { NextRequest, NextResponse } from 'next/server';
+// The `NextResponse` import is now completely removed as it is not used.
+import { NextRequest } from 'next/server';
 
 /**
- * This is the final and correct signature for a dynamic API route in modern Next.js.
- * We destructure `params` directly in the function's second argument and provide its type.
- * This is the most explicit and stable pattern that the Vercel build system will accept.
+ * This is the canonical, most robust signature for a dynamic API Route in modern Next.js.
+ * It uses the Next.js-specific `NextRequest` object for robust header/cookie handling
+ * and the inline context object `{ params: { slug: string[] } }` for type safety.
  */
 export async function GET(
   request: NextRequest,
