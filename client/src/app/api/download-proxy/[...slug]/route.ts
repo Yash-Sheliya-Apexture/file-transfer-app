@@ -256,12 +256,9 @@ import { NextRequest } from 'next/server';
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { [key: string]: string | string[] } }
-) {
-  const slugParam = params['slug'];
-
-  // Convert string to array if needed
-  const slug = Array.isArray(slugParam) ? slugParam : [slugParam];
+  { params }: { params: { slug: string[] } }
+): Promise<Response> {
+  const { slug } = params;
 
   const backendApiUrl = process.env.NEXT_PUBLIC_API_URL;
 
@@ -271,10 +268,13 @@ export async function GET(
 
   let backendUrl: string;
 
+  // Handles /api/download-proxy/zip/[groupId]
   if (slug.length === 2 && slug[0] === 'zip') {
     const groupId = slug[1];
     backendUrl = `${backendApiUrl}/files/download-zip/${groupId}`;
-  } else if (slug.length === 1) {
+  }
+  // Handles /api/download-proxy/[fileUniqueId]
+  else if (slug.length === 1) {
     const fileUniqueId = slug[0];
     backendUrl = `${backendApiUrl}/files/download/${fileUniqueId}`;
   } else {
@@ -309,7 +309,7 @@ export async function GET(
 
     return new Response(backendResponse.body, {
       status: 200,
-      headers: headers,
+      headers,
     });
 
   } catch (error) {
