@@ -368,7 +368,7 @@ export default function HistoryPage() {
           <CardTitle>Upload History</CardTitle>
           <CardDescription>
             {/* FIX: Use ' for the apostrophe */}
-            Here is a list of all the files you've uploaded.
+            Here is a list of all the files you' ve uploaded.
           </CardDescription>
         </CardHeader>
         <CardContent>{renderContent()}</CardContent>
