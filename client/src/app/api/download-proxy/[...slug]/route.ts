@@ -255,15 +255,16 @@
 import { NextRequest } from 'next/server';
 
 /**
- * This is the final and correct signature for a dynamic API route in Next.js 14/15.
- * The second argument is an object that contains `params`, and we destructure it directly
- * in the function definition.
+ * This is the final and correct signature for a dynamic API route.
+ * The second argument is a context object, which we type inline.
+ * We then destructure `params` from this context object inside the function.
  */
 export async function GET(
   request: NextRequest,
-  { params }: { params: { slug: string[] } }
+  context: { params: { slug: string[] } }
 ) {
-  // `params` is now directly available, and `slug` can be destructured from it.
+  // Destructure `params` from the context, and then `slug` from `params`.
+  const { params } = context;
   const { slug } = params;
 
   const backendApiUrl = process.env.NEXT_PUBLIC_API_URL;
