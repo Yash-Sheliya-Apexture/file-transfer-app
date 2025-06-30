@@ -294,6 +294,89 @@
 // };
 
 
+// // server/src/services/googleDrive.service.js
+
+// const { google } = require('googleapis');
+// const fs = require('fs');
+// const path = require('path');
+
+// // --- Configuration ---
+// const SCOPES = ['https://www.googleapis.com/auth/drive'];
+// const GDRIVE_FOLDER_ID = process.env.GDRIVE_FOLDER_ID;
+
+// // --- DYNAMIC CREDENTIALS LOADER ---
+// function loadCredentials() {
+//     // For production (like Render), use the environment variable
+//     if (process.env.NODE_ENV === 'production' && process.env.GOOGLE_SERVICE_ACCOUNT_KEY_JSON) {
+//         try {
+//             console.log("Loading credentials from GOOGLE_SERVICE_ACCOUNT_KEY_JSON environment variable.");
+//             return JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY_JSON);
+//         } catch (error) {
+//             console.error("FATAL: Could not parse GOOGLE_SERVICE_ACCOUNT_KEY_JSON.", error);
+//             throw new Error("Invalid GOOGLE_SERVICE_ACCOUNT_KEY_JSON environment variable.");
+//         }
+//     }
+//     // For local development, use the file path
+//     else if (process.env.GOOGLE_CREDENTIALS_PATH) {
+//         try {
+//             const keyFilePath = path.resolve(process.cwd(), process.env.GOOGLE_CREDENTIALS_PATH);
+//             console.log(`Loading credentials from resolved file path: ${keyFilePath}`);
+//             const keyFileContent = fs.readFileSync(keyFilePath, 'utf8');
+//             return JSON.parse(keyFileContent);
+//         } catch (error) {
+//             console.error(`FATAL: Could not read or parse credentials file at ${process.env.GOOGLE_CREDENTIALS_PATH}.`, error);
+//             throw new Error("Invalid GOOGLE_CREDENTIALS_PATH or file content.");
+//         }
+//     }
+//     // Fail if no credentials are found
+//     else {
+//         throw new Error("FATAL: Google credentials not configured. Set either GOOGLE_SERVICE_ACCOUNT_KEY_JSON (for production) or GOOGLE_CREDENTIALS_PATH (for development).");
+//     }
+// }
+
+// const credentials = loadCredentials();
+
+// // --- Authentication Setup ---
+// const auth = new google.auth.GoogleAuth({
+//   credentials,
+//   scopes: SCOPES,
+// });
+
+// const drive = google.drive({ version: 'v3', auth });
+
+// exports.createFile = async (fileName, mimeType, fileStream) => {
+//   const response = await drive.files.create({
+//     requestBody: { name: fileName, parents: [GDRIVE_FOLDER_ID] },
+//     media: { mimeType: mimeType, body: fileStream },
+//   });
+//   return response.data;
+// };
+
+// exports.getFileStream = async (fileId) => {
+//   const response = await drive.files.get(
+//     { fileId: fileId, alt: 'media' },
+//     { 
+//       responseType: 'stream',
+//       // UPDATED TIMEOUT: 2 hours (120 minutes * 60 seconds * 1000 milliseconds)
+//       timeout: 120 * 60 * 1000 
+//     }
+//   );
+//   return response.data;
+// };
+
+// exports.deleteFile = async (fileId) => {
+//   await drive.files.delete({ fileId: fileId });
+// };
+
+// exports.listAllFiles = async () => {
+//     const response = await drive.files.list({
+//         q: `'${GDRIVE_FOLDER_ID}' in parents and trashed = false`,
+//         fields: 'files(id, name)',
+//     });
+//     return response.data.files || [];
+// };
+
+
 // server/src/services/googleDrive.service.js
 
 const { google } = require('googleapis');
@@ -306,7 +389,6 @@ const GDRIVE_FOLDER_ID = process.env.GDRIVE_FOLDER_ID;
 
 // --- DYNAMIC CREDENTIALS LOADER ---
 function loadCredentials() {
-    // For production (like Render), use the environment variable
     if (process.env.NODE_ENV === 'production' && process.env.GOOGLE_SERVICE_ACCOUNT_KEY_JSON) {
         try {
             console.log("Loading credentials from GOOGLE_SERVICE_ACCOUNT_KEY_JSON environment variable.");
@@ -316,7 +398,6 @@ function loadCredentials() {
             throw new Error("Invalid GOOGLE_SERVICE_ACCOUNT_KEY_JSON environment variable.");
         }
     }
-    // For local development, use the file path
     else if (process.env.GOOGLE_CREDENTIALS_PATH) {
         try {
             const keyFilePath = path.resolve(process.cwd(), process.env.GOOGLE_CREDENTIALS_PATH);
@@ -328,7 +409,6 @@ function loadCredentials() {
             throw new Error("Invalid GOOGLE_CREDENTIALS_PATH or file content.");
         }
     }
-    // Fail if no credentials are found
     else {
         throw new Error("FATAL: Google credentials not configured. Set either GOOGLE_SERVICE_ACCOUNT_KEY_JSON (for production) or GOOGLE_CREDENTIALS_PATH (for development).");
     }
@@ -344,30 +424,60 @@ const auth = new google.auth.GoogleAuth({
 
 const drive = google.drive({ version: 'v3', auth });
 
-exports.createFile = async (fileName, mimeType, fileStream) => {
-  const response = await drive.files.create({
-    requestBody: { name: fileName, parents: [GDRIVE_FOLDER_ID] },
-    media: { mimeType: mimeType, body: fileStream },
-  });
-  return response.data;
+/**
+ * NEW: Creates a placeholder file on Google Drive and returns its ID and a
+ * special URL that the client can use to upload the file data directly.
+ */
+exports.createFilePlaceholder = async (fileName, fileType) => {
+    // Initiate a resumable upload session without any file data
+    const response = await drive.files.create({
+        requestBody: {
+            name: fileName,
+            parents: [GDRIVE_FOLDER_ID],
+        },
+        // We specify the media type but provide no body to start the session
+        media: {
+            mimeType: fileType,
+        }
+    }, {
+        // This option is crucial to get the resumable upload URL
+        uploadType: 'resumable'
+    });
+
+    // The unique, one-time upload URL is in the 'location' header of the response
+    const uploadUrl = response.request.responseURL;
+    
+    // We need to get the ID of the file that was just created.
+    // We can extract it from the upload URL.
+    const urlParams = new URL(uploadUrl).searchParams;
+    const fileId = urlParams.get('id');
+
+    if (!uploadUrl || !fileId) {
+        throw new Error('Failed to get resumable upload session from Google Drive.');
+    }
+
+    return { uploadUrl, fileId };
 };
 
+// This function is still needed for the worker to download files for archival.
 exports.getFileStream = async (fileId) => {
   const response = await drive.files.get(
     { fileId: fileId, alt: 'media' },
     { 
       responseType: 'stream',
-      // UPDATED TIMEOUT: 2 hours (120 minutes * 60 seconds * 1000 milliseconds)
+            // UPDATED TIMEOUT: 2 hours (120 minutes * 60 seconds * 1000 milliseconds)
       timeout: 120 * 60 * 1000 
     }
   );
   return response.data;
 };
 
+// This function is used by the worker after a successful transfer.
 exports.deleteFile = async (fileId) => {
   await drive.files.delete({ fileId: fileId });
 };
 
+// This function can be used for cleanup jobs.
 exports.listAllFiles = async () => {
     const response = await drive.files.list({
         q: `'${GDRIVE_FOLDER_ID}' in parents and trashed = false`,
