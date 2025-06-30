@@ -454,84 +454,80 @@
 
 
 // server/src/server.js
+
 const path = require('path');
+// Load environment variables from .env file
 require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
+
 const express = require('express');
 const cors = require('cors');
 const connectDB = require('./utils/database');
 
+// Import API routes
 const authRoutes = require('./routes/auth.routes');
 const userRoutes = require('./routes/user.routes');
 const fileRoutes = require('./routes/file.routes');
-const errorMiddleware = require('./middleware/error.middleware');
-const gDriveService = require('./services/googleDrive.service');
-const File = require('./models/File');
 
-// Connect to Database
+// Import middleware
+const errorMiddleware = require('./middleware/error.middleware');
+
+// Import the function to start the background worker
+const { initializeWorker } = require('./worker');
+
+// Connect to the database immediately
 connectDB();
 
 const app = express();
 
-// CORS Configuration
+// --- CORS Configuration for Production and Development ---
+// This allows your Vercel frontend to communicate with your Render backend.
 const whitelist = [
-    'http://localhost:3000',
-    process.env.FRONTEND_URL,
-].filter(Boolean); // Filter out undefined values
+    'http://localhost:3000',    // For local development
+    process.env.FRONTEND_URL,   // Your Vercel URL will be read from this .env variable
+].filter(Boolean); // This filters out any undefined/empty values
 
 const corsOptions = {
     origin: function (origin, callback) {
+        // Allow requests with no origin (like mobile apps, Postman) and whitelisted domains
         if (!origin || whitelist.indexOf(origin) !== -1) {
             callback(null, true);
         } else {
+            console.error(`CORS Error: Origin ${origin} not allowed.`);
             callback(new Error('Not allowed by CORS'));
         }
     },
     credentials: true,
 };
+
+// --- Core Middlewares ---
 app.use(cors(corsOptions));
 app.use(express.json());
 
-// Health Check Endpoint
+// --- Health Check Endpoint ---
+// This is useful for monitoring services like Uptime Robot to keep your free server awake.
 app.get('/health', (req, res) => {
     res.status(200).send('OK');
 });
 
-// API Routes
+// --- API Routes ---
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/files', fileRoutes);
 
-// Error Handling Middleware
+// --- Error Handling Middleware ---
+// This should be the last middleware added.
 app.use(errorMiddleware);
 
+
 const PORT = process.env.PORT || 5000;
+
+// Start the server and listen for requests
 app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-    // Run the orphan cleanup function on server start
-    runDriveCleanup();
+    console.log(`API Server running on port ${PORT}`);
+
+    // --- START THE BACKGROUND WORKER ---
+    // After the API server is successfully listening, we initialize the worker.
+    // It will run in the same Node.js process and start pulling jobs from the Redis queue.
+    console.log("Initializing background worker...");
+    initializeWorker();
 });
-
-// This function is still useful for cleaning up failed/orphaned uploads.
-async function runDriveCleanup() {
-    console.log('Running Google Drive orphan cleanup job...');
-    try {
-        const driveFiles = await gDriveService.listAllFiles();
-        if (!driveFiles || driveFiles.length === 0) {
-            console.log('Drive folder is already clean. No action needed.');
-            return;
-        }
-
-        for (const driveFile of driveFiles) {
-            const dbFile = await File.findOne({ gDriveFileId: driveFile.id });
-            // Delete if not in DB, or if it's already marked as IN_TELEGRAM or ERROR
-            if (!dbFile || dbFile.status === 'IN_TELEGRAM' || dbFile.status === 'ERROR') {
-                let reason = !dbFile ? 'not tracked in DB' : `status is '${dbFile.status}'`;
-                console.log(`Found orphaned file in Drive: ${driveFile.name} (${driveFile.id}). Reason: ${reason}. Deleting...`);
-                await gDriveService.deleteFile(driveFile.id);
-            }
-        }
-        console.log('Google Drive orphan cleanup job finished.');
-    } catch (error) {
-        console.error('Error during Google Drive cleanup:', error);
-    }
-}
