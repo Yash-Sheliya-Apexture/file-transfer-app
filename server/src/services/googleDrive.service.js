@@ -377,19 +377,114 @@
 //     return response.data.files || [];
 // };
 
-// server/src/services/googleDrive.service.js
+// // server/src/services/googleDrive.service.js
+
+// const { google } = require('googleapis');
+// const fs = require('fs');
+// const path = require('path');
+
+// // --- Configuration ---
+// const SCOPES = ['https://www.googleapis.com/auth/drive'];
+// const GDRIVE_FOLDER_ID = process.env.GDRIVE_FOLDER_ID;
+
+// // --- DYNAMIC CREDENTIALS LOADER ---
+// function loadCredentials() {
+//     // For production (like Render), use the environment variable
+//     if (process.env.NODE_ENV === 'production' && process.env.GOOGLE_SERVICE_ACCOUNT_KEY_JSON) {
+//         try {
+//             console.log("Loading credentials from GOOGLE_SERVICE_ACCOUNT_KEY_JSON environment variable.");
+//             return JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY_JSON);
+//         } catch (error) {
+//             console.error("FATAL: Could not parse GOOGLE_SERVICE_ACCOUNT_KEY_JSON.", error);
+//             throw new Error("Invalid GOOGLE_SERVICE_ACCOUNT_KEY_JSON environment variable.");
+//         }
+//     }
+//     // For local development, use the file path
+//     else if (process.env.GOOGLE_CREDENTIALS_PATH) {
+//         try {
+//             const keyFilePath = path.resolve(process.cwd(), process.env.GOOGLE_CREDENTIALS_PATH);
+//             console.log(`Loading credentials from resolved file path: ${keyFilePath}`);
+//             const keyFileContent = fs.readFileSync(keyFilePath, 'utf8');
+//             return JSON.parse(keyFileContent);
+//         } catch (error) {
+//             console.error(`FATAL: Could not read or parse credentials file at ${process.env.GOOGLE_CREDENTIALS_PATH}.`, error);
+//             throw new Error("Invalid GOOGLE_CREDENTIALS_PATH or file content.");
+//         }
+//     }
+//     // Fail if no credentials are found
+//     else {
+//         throw new Error("FATAL: Google credentials not configured. Set either GOOGLE_SERVICE_ACCOUNT_KEY_JSON (for production) or GOOGLE_CREDENTIALS_PATH (for development).");
+//     }
+// }
+
+// const credentials = loadCredentials();
+
+// // --- Authentication Setup ---
+// const auth = new google.auth.GoogleAuth({
+//   credentials,
+//   scopes: SCOPES,
+// });
+
+// const drive = google.drive({ version: 'v3', auth });
+
+// exports.createFile = async (fileName, mimeType, fileStream) => {
+//   const response = await drive.files.create({
+//     requestBody: { name: fileName, parents: [GDRIVE_FOLDER_ID] },
+//     media: { mimeType: mimeType, body: fileStream },
+//     // ** THE FIX **
+//     // This parameter is crucial. It ensures that the file is created with the
+//     // ownership model of the parent folder. Since you own the folder, you will
+//     // own the file, and it will count against YOUR storage quota.
+//     supportsAllDrives: true,
+//   });
+//   return response.data;
+// };
+
+// exports.getFileStream = async (fileId) => {
+//   const response = await drive.files.get(
+//     { 
+//       fileId: fileId, 
+//       alt: 'media',
+//       // This is good practice to include for consistency
+//       supportsAllDrives: true,
+//     },
+//     { 
+//       responseType: 'stream',
+//       // UPDATED TIMEOUT: 2 hours (120 minutes * 60 seconds * 1000 milliseconds)
+//       timeout: 120 * 60 * 1000 
+//     }
+//   );
+//   return response.data;
+// };
+
+// exports.deleteFile = async (fileId) => {
+//   await drive.files.delete({ 
+//     fileId: fileId,
+//     // This is good practice to include for consistency
+//     supportsAllDrives: true,
+//   });
+// };
+
+// exports.listAllFiles = async () => {
+//     const response = await drive.files.list({
+//         q: `'${GDRIVE_FOLDER_ID}' in parents and trashed = false`,
+//         fields: 'files(id, name)',
+//         // These parameters ensure compatibility with all drive types
+//         supportsAllDrives: true,
+//         includeItemsFromAllDrives: true,
+//     });
+//     return response.data.files || [];
+// };
 
 const { google } = require('googleapis');
 const fs = require('fs');
 const path = require('path');
 
-// --- Configuration ---
 const SCOPES = ['https://www.googleapis.com/auth/drive'];
 const GDRIVE_FOLDER_ID = process.env.GDRIVE_FOLDER_ID;
+const GDriveOwnerEmail = process.env.GDRIVE_OWNER_EMAIL;
 
-// --- DYNAMIC CREDENTIALS LOADER ---
 function loadCredentials() {
-    // For production (like Render), use the environment variable
     if (process.env.NODE_ENV === 'production' && process.env.GOOGLE_SERVICE_ACCOUNT_KEY_JSON) {
         try {
             console.log("Loading credentials from GOOGLE_SERVICE_ACCOUNT_KEY_JSON environment variable.");
@@ -398,9 +493,7 @@ function loadCredentials() {
             console.error("FATAL: Could not parse GOOGLE_SERVICE_ACCOUNT_KEY_JSON.", error);
             throw new Error("Invalid GOOGLE_SERVICE_ACCOUNT_KEY_JSON environment variable.");
         }
-    }
-    // For local development, use the file path
-    else if (process.env.GOOGLE_CREDENTIALS_PATH) {
+    } else if (process.env.GOOGLE_CREDENTIALS_PATH) {
         try {
             const keyFilePath = path.resolve(process.cwd(), process.env.GOOGLE_CREDENTIALS_PATH);
             console.log(`Loading credentials from resolved file path: ${keyFilePath}`);
@@ -410,16 +503,13 @@ function loadCredentials() {
             console.error(`FATAL: Could not read or parse credentials file at ${process.env.GOOGLE_CREDENTIALS_PATH}.`, error);
             throw new Error("Invalid GOOGLE_CREDENTIALS_PATH or file content.");
         }
-    }
-    // Fail if no credentials are found
-    else {
-        throw new Error("FATAL: Google credentials not configured. Set either GOOGLE_SERVICE_ACCOUNT_KEY_JSON (for production) or GOOGLE_CREDENTIALS_PATH (for development).");
+    } else {
+        throw new Error("FATAL: Google credentials not configured. Set either GOOGLE_SERVICE_ACCOUNT_KEY_JSON or GOOGLE_CREDENTIALS_PATH.");
     }
 }
 
 const credentials = loadCredentials();
 
-// --- Authentication Setup ---
 const auth = new google.auth.GoogleAuth({
   credentials,
   scopes: SCOPES,
@@ -431,31 +521,51 @@ exports.createFile = async (fileName, mimeType, fileStream) => {
   const response = await drive.files.create({
     requestBody: { name: fileName, parents: [GDRIVE_FOLDER_ID] },
     media: { mimeType: mimeType, body: fileStream },
+    supportsAllDrives: true,
   });
   return response.data;
 };
 
+exports.transferOwnership = async (fileId) => {
+    if (!GDriveOwnerEmail) {
+        console.warn("GDRIVE_OWNER_EMAIL not set. Cannot transfer ownership. File will remain on service account quota.");
+        return;
+    }
+    try {
+        await drive.permissions.create({
+            fileId: fileId,
+            transferOwnership: true,
+            requestBody: {
+                role: 'owner',
+                type: 'user',
+                emailAddress: GDriveOwnerEmail,
+            },
+            supportsAllDrives: true,
+        });
+        console.log(`Successfully transferred ownership of ${fileId} to ${GDriveOwnerEmail}`);
+    } catch(error) {
+        console.error(`Failed to transfer ownership for file ${fileId}:`, error.message);
+    }
+};
+
 exports.getFileStream = async (fileId) => {
   const response = await drive.files.get(
-    { fileId: fileId, alt: 'media' },
-    { 
-      responseType: 'stream',
-      // Very long timeout (30 minutes) to handle large file streams without aborting
-      // UPDATED TIMEOUT: 2 hours (120 minutes * 60 seconds * 1000 milliseconds)
-      timeout: 120 * 60 * 1000 
-    }
+    { fileId, alt: 'media', supportsAllDrives: true },
+    { responseType: 'stream', timeout: 120 * 60 * 1000 }
   );
   return response.data;
 };
 
 exports.deleteFile = async (fileId) => {
-  await drive.files.delete({ fileId: fileId });
+  await drive.files.delete({ fileId, supportsAllDrives: true });
 };
 
 exports.listAllFiles = async () => {
     const response = await drive.files.list({
         q: `'${GDRIVE_FOLDER_ID}' in parents and trashed = false`,
         fields: 'files(id, name)',
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
     });
     return response.data.files || [];
 };
