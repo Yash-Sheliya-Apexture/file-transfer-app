@@ -916,9 +916,8 @@ const archiver = require('archiver');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const archiveQueue = require('../utils/queue'); // Import the queue
 
-// --- UPLOAD & JOB CREATION LOGIC ---
+// --- UPLOAD & IMMEDIATE TRIGGER LOGIC ---
 exports.uploadFile = async (req, res, next) => {
     let fileDoc;
     try {
@@ -940,14 +939,13 @@ exports.uploadFile = async (req, res, next) => {
         fileDoc.status = 'IN_DRIVE';
         await fileDoc.save();
         const countInDrive = await File.countDocuments({ groupId, status: 'IN_DRIVE' });
-
         if (countInDrive === groupTotal) {
-            console.log(`[API] All ${groupTotal} files for group ${groupId} are ready. Adding job to queue.`);
-            await archiveQueue.add('archive-group', { groupId });
+            console.log(`[GROUP ${groupId}] All ${groupTotal} files are in Drive. Starting immediate transfer to Telegram.`);
+            transferGroupToTelegram(groupId);
         }
-        res.status(201).json({ message: 'File uploaded and scheduled for archival.' });
+        res.status(201).json({ message: 'File uploaded to Drive successfully.' });
     } catch (error) {
-        console.error(`Upload failed:`, error);
+        console.error(`Upload failed for ${fileDoc?.originalName || 'unknown file'}:`, error);
         if (fileDoc && fileDoc._id) { await File.findByIdAndUpdate(fileDoc._id, { status: 'ERROR' }); }
         next(error);
     }
