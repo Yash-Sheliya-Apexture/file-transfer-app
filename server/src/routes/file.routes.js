@@ -30,6 +30,8 @@
 
 // module.exports = router;
 
+
+// server/src/routes/file.routes.js
 const express = require('express');
 const { 
     uploadFile, 

@@ -357,6 +357,7 @@
 //     { fileId: fileId, alt: 'media' },
 //     { 
 //       responseType: 'stream',
+//       // Very long timeout (30 minutes) to handle large file streams without aborting
 //       // UPDATED TIMEOUT: 2 hours (120 minutes * 60 seconds * 1000 milliseconds)
 //       timeout: 120 * 60 * 1000 
 //     }
@@ -376,7 +377,6 @@
 //     return response.data.files || [];
 // };
 
-
 // server/src/services/googleDrive.service.js
 
 const { google } = require('googleapis');
@@ -386,28 +386,34 @@ const path = require('path');
 // --- Configuration ---
 const SCOPES = ['https://www.googleapis.com/auth/drive'];
 const GDRIVE_FOLDER_ID = process.env.GDRIVE_FOLDER_ID;
-// IMPORTANT: Add your personal Google account email to the .env file
-const GDRIVE_OWNER_EMAIL = process.env.GDRIVE_OWNER_EMAIL;
 
-// --- DYNAMIC CREDENTIALS LOADER (Unchanged) ---
+// --- DYNAMIC CREDENTIALS LOADER ---
 function loadCredentials() {
+    // For production (like Render), use the environment variable
     if (process.env.NODE_ENV === 'production' && process.env.GOOGLE_SERVICE_ACCOUNT_KEY_JSON) {
         try {
+            console.log("Loading credentials from GOOGLE_SERVICE_ACCOUNT_KEY_JSON environment variable.");
             return JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY_JSON);
         } catch (error) {
+            console.error("FATAL: Could not parse GOOGLE_SERVICE_ACCOUNT_KEY_JSON.", error);
             throw new Error("Invalid GOOGLE_SERVICE_ACCOUNT_KEY_JSON environment variable.");
         }
     }
+    // For local development, use the file path
     else if (process.env.GOOGLE_CREDENTIALS_PATH) {
         try {
             const keyFilePath = path.resolve(process.cwd(), process.env.GOOGLE_CREDENTIALS_PATH);
-            return JSON.parse(fs.readFileSync(keyFilePath, 'utf8'));
+            console.log(`Loading credentials from resolved file path: ${keyFilePath}`);
+            const keyFileContent = fs.readFileSync(keyFilePath, 'utf8');
+            return JSON.parse(keyFileContent);
         } catch (error) {
+            console.error(`FATAL: Could not read or parse credentials file at ${process.env.GOOGLE_CREDENTIALS_PATH}.`, error);
             throw new Error("Invalid GOOGLE_CREDENTIALS_PATH or file content.");
         }
     }
+    // Fail if no credentials are found
     else {
-        throw new Error("FATAL: Google credentials not configured.");
+        throw new Error("FATAL: Google credentials not configured. Set either GOOGLE_SERVICE_ACCOUNT_KEY_JSON (for production) or GOOGLE_CREDENTIALS_PATH (for development).");
     }
 }
 
@@ -421,65 +427,22 @@ const auth = new google.auth.GoogleAuth({
 
 const drive = google.drive({ version: 'v3', auth });
 
-
-// --- CORE FUNCTIONS ---
-
-/**
- * NEW: A function to transfer ownership of a file to your personal account.
- */
-async function transferOwnership(fileId) {
-    if (!GDRIVE_OWNER_EMAIL) {
-        console.warn("GDRIVE_OWNER_EMAIL not set. Skipping ownership transfer. Files will count against service account quota.");
-        return;
-    }
-    // First, grant owner permission to your personal email
-    await drive.permissions.create({
-        fileId: fileId,
-        requestBody: {
-            role: 'owner',
-            type: 'user',
-            emailAddress: GDRIVE_OWNER_EMAIL,
-        },
-        // IMPORTANT: This allows transferring ownership away from the service account
-        transferOwnership: true,
-    });
-    console.log(`Ownership of file ${fileId} transferred to ${GDRIVE_OWNER_EMAIL}.`);
-}
-
-/**
- * UPDATED: The main file creation function now transfers ownership after upload.
- */
 exports.createFile = async (fileName, mimeType, fileStream) => {
   const response = await drive.files.create({
-    requestBody: {
-      name: fileName,
-      parents: [GDRIVE_FOLDER_ID],
-    },
-    media: {
-      mimeType: mimeType,
-      body: fileStream,
-    },
-    // Add fields to ensure we get the file ID back
-    fields: 'id' 
+    requestBody: { name: fileName, parents: [GDRIVE_FOLDER_ID] },
+    media: { mimeType: mimeType, body: fileStream },
   });
-
-  const fileId = response.data.id;
-  if (fileId) {
-    // After creating the file, immediately transfer ownership to your account
-    await transferOwnership(fileId);
-  }
-  
   return response.data;
 };
 
-
-// --- OTHER FUNCTIONS (Unchanged) ---
 exports.getFileStream = async (fileId) => {
   const response = await drive.files.get(
     { fileId: fileId, alt: 'media' },
     { 
       responseType: 'stream',
-      timeout: 120 * 60 * 1000 // 2-hour timeout
+      // Very long timeout (30 minutes) to handle large file streams without aborting
+      // UPDATED TIMEOUT: 2 hours (120 minutes * 60 seconds * 1000 milliseconds)
+      timeout: 120 * 60 * 1000 
     }
   );
   return response.data;
