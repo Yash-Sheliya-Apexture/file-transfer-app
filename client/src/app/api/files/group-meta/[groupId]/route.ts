@@ -89,16 +89,22 @@
 import { NextResponse } from 'next/server';
 
 /**
- * This is the most explicit and failsafe signature for a dynamic API Route.
- * We accept a `context` object as the second argument and provide its type inline.
- * We then destructure the `groupId` from inside the function body.
- * This pattern avoids all complex signature parsing for the Vercel build system.
+ * This is the final and failsafe signature for a dynamic API Route.
+ * We ONLY use the `request` object. We manually parse the URL to get the `groupId`.
+ * This completely avoids the problematic second `context`/`params` argument that is
+ * causing conflicting errors between the local dev server and the Vercel build environment.
  */
-export async function GET(
-  request: Request,
-  context: { params: { groupId: string } }
-) {
-  const { groupId } = context.params;
+export async function GET(request: Request) {
+  // Manually parse the groupId from the URL pathname
+  const url = new URL(request.url);
+  const pathParts = url.pathname.split('/');
+  // The path is /api/files/group-meta/[groupId], so the groupId is the last part
+  const groupId = pathParts[pathParts.length - 1];
+
+  // Add a simple validation check
+  if (!groupId) {
+    return NextResponse.json({ message: "Group ID is missing in the URL." }, { status: 400 });
+  }
   
   const backendApiUrl = process.env.NEXT_PUBLIC_API_URL;
 

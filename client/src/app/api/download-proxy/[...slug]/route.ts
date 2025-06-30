@@ -252,24 +252,99 @@
 
 
 
+// import { NextRequest } from 'next/server';
+
+// export async function GET(request: NextRequest): Promise<Response> {
+//   const backendApiUrl = process.env.NEXT_PUBLIC_API_URL;
+
+//   if (!backendApiUrl) {
+//     return new Response("Backend API URL is not configured.", { status: 500 });
+//   }
+
+//   // Extract slug from URL pathname
+//   // Example: /api/download-proxy/zip/123 -> ['zip', '123']
+//   const slug = request.nextUrl.pathname
+//     .replace(/^\/api\/download-proxy\//, '')
+//     .split('/')
+//     .filter(Boolean);
+
+//   let backendUrl: string;
+
+//   if (slug.length === 2 && slug[0] === 'zip') {
+//     const groupId = slug[1];
+//     backendUrl = `${backendApiUrl}/files/download-zip/${groupId}`;
+//   } else if (slug.length === 1) {
+//     const fileUniqueId = slug[0];
+//     backendUrl = `${backendApiUrl}/files/download/${fileUniqueId}`;
+//   } else {
+//     return new Response("Invalid download path.", { status: 400 });
+//   }
+
+//   try {
+//     const backendResponse = await fetch(backendUrl);
+
+//     if (!backendResponse.ok) {
+//       const errorBody = await backendResponse.text();
+//       return new Response(errorBody, {
+//         status: backendResponse.status,
+//         statusText: backendResponse.statusText,
+//       });
+//     }
+
+//     const headers = new Headers();
+//     const contentDisposition = backendResponse.headers.get('Content-Disposition');
+//     const contentType = backendResponse.headers.get('Content-Type');
+//     const contentLength = backendResponse.headers.get('Content-Length');
+
+//     if (contentDisposition) {
+//       headers.set('Content-Disposition', contentDisposition);
+//     }
+//     if (contentType) {
+//       headers.set('Content-Type', contentType);
+//     }
+//     if (contentLength) {
+//       headers.set('Content-Length', contentLength);
+//     }
+
+//     return new Response(backendResponse.body, {
+//       status: 200,
+//       headers,
+//     });
+
+//   } catch (error) {
+//     console.error("Download proxy error:", error);
+//     return new Response("Internal Server Error", { status: 500 });
+//   }
+// }
+
+
+// /client/src/app/api/download-proxy/[...slug]/route.ts
+
 import { NextRequest } from 'next/server';
 
-export async function GET(request: NextRequest): Promise<Response> {
+/**
+ * This is the final, bulletproof signature for the API Route.
+ * We will only use the `request` object and manually parse the URL to get the slug parts.
+ * This completely avoids the problematic second `context`/`params` argument that is
+ * causing the Vercel build to fail.
+ */
+export async function GET(request: NextRequest) {
+  // Manually parse the slug from the URL pathname
+  const url = new URL(request.url);
+  const pathParts = url.pathname.split('/');
+  // The path is /api/download-proxy/[...slug], so we slice after the 3rd element
+  // Example: ['', 'api', 'download-proxy', 'zip', 'groupId'] -> slice(3) -> ['zip', 'groupId']
+  const slug = pathParts.slice(3);
+
   const backendApiUrl = process.env.NEXT_PUBLIC_API_URL;
 
   if (!backendApiUrl) {
     return new Response("Backend API URL is not configured.", { status: 500 });
   }
 
-  // Extract slug from URL pathname
-  // Example: /api/download-proxy/zip/123 -> ['zip', '123']
-  const slug = request.nextUrl.pathname
-    .replace(/^\/api\/download-proxy\//, '')
-    .split('/')
-    .filter(Boolean);
-
   let backendUrl: string;
 
+  // The rest of the logic is the same
   if (slug.length === 2 && slug[0] === 'zip') {
     const groupId = slug[1];
     backendUrl = `${backendApiUrl}/files/download-zip/${groupId}`;
@@ -296,19 +371,13 @@ export async function GET(request: NextRequest): Promise<Response> {
     const contentType = backendResponse.headers.get('Content-Type');
     const contentLength = backendResponse.headers.get('Content-Length');
 
-    if (contentDisposition) {
-      headers.set('Content-Disposition', contentDisposition);
-    }
-    if (contentType) {
-      headers.set('Content-Type', contentType);
-    }
-    if (contentLength) {
-      headers.set('Content-Length', contentLength);
-    }
+    if (contentDisposition) headers.set('Content-Disposition', contentDisposition);
+    if (contentType) headers.set('Content-Type', contentType);
+    if (contentLength) headers.set('Content-Length', contentLength);
 
     return new Response(backendResponse.body, {
       status: 200,
-      headers,
+      headers: headers,
     });
 
   } catch (error) {
