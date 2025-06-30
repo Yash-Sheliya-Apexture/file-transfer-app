@@ -336,6 +336,13 @@ app.use(cors(corsOptions));
 
 app.use(express.json());
 
+
+// --- HEALTH CHECK ENDPOINT ---
+app.get('/health', (req, res) => {
+    res.status(200).send('OK');
+});
+
+
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/files', fileRoutes);
