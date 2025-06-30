@@ -89,16 +89,16 @@
 import { NextResponse } from 'next/server';
 
 /**
- * This is the canonical signature for a dynamic API Route as per Next.js docs.
- * The first argument is the request, and the second is an object containing `params`,
- * which we destructure and type inline.
+ * This is the most explicit and failsafe signature for a dynamic API Route.
+ * We accept a `context` object as the second argument and provide its type inline.
+ * We then destructure the `groupId` from inside the function body.
+ * This pattern avoids all complex signature parsing for the Vercel build system.
  */
 export async function GET(
   request: Request,
-  { params }: { params: { groupId: string } }
+  context: { params: { groupId: string } }
 ) {
-  // `params` is now correctly available, so we can destructure `groupId`.
-  const { groupId } = params;
+  const { groupId } = context.params;
   
   const backendApiUrl = process.env.NEXT_PUBLIC_API_URL;
 
@@ -112,10 +112,8 @@ export async function GET(
   const backendUrl = `${backendApiUrl}/files/group-meta/${groupId}`;
 
   try {
-    // Fetch data from your backend server
     const backendResponse = await fetch(backendUrl);
 
-    // If the backend returned an error (e.g., 404), forward it
     if (!backendResponse.ok) {
       const errorData = await backendResponse.json();
       return NextResponse.json(
@@ -124,10 +122,7 @@ export async function GET(
       );
     }
 
-    // Get the JSON data from the backend response
     const data = await backendResponse.json();
-
-    // Return the data to the frontend client component
     return NextResponse.json(data, { status: 200 });
 
   } catch (error) {
