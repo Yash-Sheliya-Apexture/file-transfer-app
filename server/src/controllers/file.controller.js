@@ -939,36 +939,38 @@ exports.uploadFile = async (req, res, next) => {
         fileDoc.status = 'IN_DRIVE';
         await fileDoc.save();
         const countInDrive = await File.countDocuments({ groupId, status: 'IN_DRIVE' });
+
         if (countInDrive === groupTotal) {
-            console.log(`[GROUP ${groupId}] All ${groupTotal} files are in Drive. Starting immediate transfer to Telegram.`);
+            console.log(`[API] All ${groupTotal} files for group ${groupId} are ready. Triggering transfer.`);
+            // THE CRITICAL CHANGE: Call the transfer function directly.
+            // This runs in the background ("fire and forget") so the user gets an immediate response.
             transferGroupToTelegram(groupId);
         }
-        res.status(201).json({ message: 'File uploaded to Drive successfully.' });
+        res.status(201).json({ message: 'File uploaded and archival process started.' });
     } catch (error) {
-        console.error(`Upload failed for ${fileDoc?.originalName || 'unknown file'}:`, error);
+        console.error(`Upload failed:`, error);
         if (fileDoc && fileDoc._id) { await File.findByIdAndUpdate(fileDoc._id, { status: 'ERROR' }); }
         next(error);
     }
 };
 
-// --- BULLETPROOF BACKGROUND TRANSFER LOGIC ---
+// --- ROBUST BACKGROUND TRANSFER LOGIC ---
+// This function now lives directly inside the controller file.
 async function transferGroupToTelegram(groupId) {
     const filesInGroup = await File.find({ groupId, status: 'IN_DRIVE' });
     let allTransfersSucceeded = true;
 
-    console.log(`[GROUP ${groupId}] Starting transfer phase for ${filesInGroup.length} files.`);
+    console.log(`[TRANSFER] Starting transfer phase for ${filesInGroup.length} files in group ${groupId}.`);
 
     // PHASE 1: TRANSFER ALL FILES. Stop if any single file fails.
     for (const fileDoc of filesInGroup) {
         try {
             await fileDoc.updateOne({ status: 'ARCHIVING' });
-
             const gDriveStream = await gDriveService.getFileStream(fileDoc.gDriveFileId);
             const CHUNK_SIZE = 15 * 1024 * 1024;
             let chunkBuffer = Buffer.alloc(0);
             const uploadPromises = [];
             let chunkIndex = 0;
-
             for await (const data of gDriveStream) {
                 chunkBuffer = Buffer.concat([chunkBuffer, data]);
                 while (chunkBuffer.length >= CHUNK_SIZE) {
@@ -980,40 +982,34 @@ async function transferGroupToTelegram(groupId) {
             if (chunkBuffer.length > 0) {
                 uploadPromises.push(telegramService.uploadChunk(chunkBuffer, `${fileDoc.originalName}.part${chunkIndex++}`));
             }
-
             const messageIds = await Promise.all(uploadPromises);
-
             await fileDoc.updateOne({ telegramMessageIds: messageIds, status: 'IN_TELEGRAM' });
-            console.log(`[GROUP ${groupId}] SUCCESS: Transferred ${fileDoc.originalName} to Telegram.`);
-
+            console.log(`[TRANSFER] SUCCESS: Transferred ${fileDoc.originalName} to Telegram.`);
         } catch (error) {
-            console.error(`[GROUP ${groupId}] FATAL ERROR: Failed to transfer ${fileDoc.originalName}. Aborting group transfer.`, error);
+            console.error(`[TRANSFER] FATAL ERROR for ${fileDoc.originalName}. Aborting group.`, error);
             await fileDoc.updateOne({ status: 'ERROR' });
             allTransfersSucceeded = false;
-            break;
+            break; 
         }
     }
 
     // PHASE 2: ATOMIC CLEANUP. Only run if ALL files succeeded.
     if (allTransfersSucceeded) {
-        console.log(`[GROUP ${groupId}] All transfers successful. Starting cleanup of ${filesInGroup.length} files from Google Drive.`);
-        // NOTE: We refetch the files to ensure we have the correct gDriveFileId for all of them.
+        console.log(`[TRANSFER] All transfers for group ${groupId} successful. Starting cleanup.`);
         const successfullyTransferredFiles = await File.find({ groupId, status: 'IN_TELEGRAM' });
         for (const transferredFile of successfullyTransferredFiles) {
             if (transferredFile.gDriveFileId) {
                 try {
                     await gDriveService.deleteFile(transferredFile.gDriveFileId);
-                    console.log(`[GROUP ${groupId}] Deleted ${transferredFile.originalName} from Drive.`);
                 } catch (error) {
-                    console.error(`[GROUP ${groupId}] FAILED to delete ${transferredFile.gDriveFileId} from Drive during cleanup:`, error);
+                    console.error(`[TRANSFER] FAILED to delete ${transferredFile.gDriveFileId} from Drive.`);
                 }
             }
         }
     } else {
-        console.log(`[GROUP ${groupId}] Transfer failed for at least one file. No files will be deleted from Google Drive.`);
+        console.log(`[TRANSFER] Group ${groupId} failed. No files will be deleted from Drive.`);
     }
-
-    console.log(`[GROUP ${groupId}] Finished processing.`);
+    console.log(`[TRANSFER] Finished processing group ${groupId}.`);
 }
 
 
