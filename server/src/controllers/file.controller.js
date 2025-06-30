@@ -517,6 +517,191 @@
 // };
 
 
+// // server/src/controllers/file.controller.js
+
+// const File = require('../models/File');
+// const gDriveService = require('../services/googleDrive.service');
+// const telegramService = require('../services/telegram.service');
+// const { PassThrough } = require('stream');
+// const archiver = require('archiver');
+// const fs = require('fs');
+// const os = require('os');
+// const path = require('path');
+
+// // --- UPLOAD AND BACKGROUND ARCHIVAL LOGIC (Correct and Unchanged) ---
+// // This part remains the same as our previous correct version.
+// exports.uploadFile = async (req, res, next) => {
+//     let fileDoc;
+//     try {
+//         const fileName = decodeURIComponent(req.headers['x-file-name']);
+//         const fileSize = parseInt(req.headers['content-length'], 10);
+//         const groupId = req.headers['x-group-id'];
+//         const groupTotal = parseInt(req.headers['x-group-total'], 10);
+
+//         if (!fileName || !fileSize || !groupId || !groupTotal) {
+//             return res.status(400).json({ message: 'Missing required file metadata headers.' });
+//         }
+
+//         fileDoc = new File({
+//             originalName: fileName, size: fileSize, owner: req.user ? req.user._id : null, groupId: groupId, groupTotal: groupTotal,
+//         });
+
+//         const passThrough = new PassThrough();
+//         req.pipe(passThrough);
+//         const gDriveFile = await gDriveService.createFile(fileName, req.headers['content-type'], passThrough);
+
+//         fileDoc.gDriveFileId = gDriveFile.id;
+//         fileDoc.status = 'IN_DRIVE';
+//         fileDoc.driveUploadTimestamp = new Date();
+//         await fileDoc.save();
+
+//         res.status(201).json({ message: 'File uploaded to Drive successfully.' });
+//     } catch (error) {
+//         console.error(`Upload failed for ${fileDoc?.originalName || 'unknown file'}:`, error);
+//         if (fileDoc && fileDoc._id) { await File.findByIdAndUpdate(fileDoc._id, { status: 'ERROR' }); }
+//         next(error);
+//     }
+// };
+
+// // --- DOWNLOAD LOGIC ---
+
+// // This function for single file downloads is correct.
+// exports.downloadFile = async (req, res, next) => {
+//     try {
+//         const file = await File.findOne({ uniqueId: req.params.uniqueId });
+//         if (!file) { return res.status(404).json({ message: 'File not found.' }); }
+//         res.setHeader('Content-Disposition', `attachment; filename="${file.originalName}"`);
+//         res.setHeader('Content-Length', file.size);
+//         res.setHeader('Content-Type', 'application/octet-stream');
+//         if (file.status === 'IN_TELEGRAM') {
+//             const mergedStream = await getMergedTelegramStream(file.telegramMessageIds);
+//             mergedStream.pipe(res);
+//         } else if (file.status === 'IN_DRIVE' || file.status === 'ARCHIVING') {
+//             const gDriveStream = await gDriveService.getFileStream(file.gDriveFileId);
+//             gDriveStream.pipe(res);
+//         } else {
+//             res.status(500).json({ message: 'File is not available for download.' });
+//         }
+//     } catch (error) { next(error); }
+// };
+
+// // --- NEW, BULLETPROOF ZIP DOWNLOAD LOGIC ---
+// exports.downloadGroupAsZip = async (req, res, next) => {
+//     const { groupId } = req.params;
+//     // Create a unique temporary directory for this download request
+//     const tempDir = path.join(os.tmpdir(), `zip-${groupId}-${Date.now()}`);
+
+//     try {
+//         await fs.promises.mkdir(tempDir, { recursive: true });
+
+//         const files = await File.find({ groupId }).sort({ createdAt: 1 });
+//         if (!files || files.length === 0) {
+//             return res.status(404).json({ message: 'No files found.' });
+//         }
+
+//         console.log(`[ZIP ${groupId}] Starting download of ${files.length} files to temporary storage.`);
+
+//         // 1. DOWNLOAD ALL FILES TO THE SERVER'S TEMPORARY FOLDER
+//         for (const file of files) {
+//             const localFilePath = path.join(tempDir, file.originalName);
+//             const writer = fs.createWriteStream(localFilePath);
+//             let sourceStream;
+
+//             if (file.status === 'IN_TELEGRAM' && file.telegramMessageIds.length > 0) {
+//                 sourceStream = await getMergedTelegramStream(file.telegramMessageIds);
+//             } else if ((file.status === 'IN_DRIVE' || file.status === 'ARCHIVING') && file.gDriveFileId) {
+//                 sourceStream = await gDriveService.getFileStream(file.gDriveFileId);
+//             } else {
+//                 console.warn(`[ZIP ${groupId}] Skipping file ${file.originalName} due to invalid status.`);
+//                 continue; // Skip this file
+//             }
+
+//             sourceStream.pipe(writer);
+//             // Wait for the file to be completely written to disk
+//             await new Promise((resolve, reject) => {
+//                 writer.on('finish', resolve);
+//                 writer.on('error', reject);
+//                 sourceStream.on('error', reject); // Propagate stream errors
+//             });
+//         }
+
+//         console.log(`[ZIP ${groupId}] All files downloaded. Starting ZIP creation.`);
+
+//         // 2. CREATE THE ZIP FROM THE LOCALLY STORED FILES
+//         const zipFileName = `${files[0].originalName.split('.')[0] || 'batch'}.zip`;
+//         const zipFilePath = path.join(tempDir, zipFileName);
+//         const output = fs.createWriteStream(zipFilePath);
+//         const archive = archiver('zip', { zlib: { level: 9 } }); // Use higher compression
+
+//         archive.pipe(output);
+//         // Add all files from the temporary directory into the zip
+//         archive.directory(tempDir, false);
+//         await archive.finalize();
+
+//         // This promise resolves when the ZIP file is fully written to disk
+//         await new Promise((resolve, reject) => {
+//           output.on('close', resolve);
+//           archive.on('error', reject);
+//         });
+
+//         console.log(`[ZIP ${groupId}] ZIP file created successfully.`);
+
+//         // 3. STREAM THE COMPLETED ZIP FILE TO THE USER
+//         const zipStats = await fs.promises.stat(zipFilePath);
+//         res.setHeader('Content-Disposition', `attachment; filename="${zipFileName}"`);
+//         res.setHeader('Content-Type', 'application/zip');
+//         res.setHeader('Content-Length', zipStats.size);
+
+//         const zipStream = fs.createReadStream(zipFilePath);
+//         zipStream.pipe(res);
+
+//     } catch (error) {
+//         console.error(`[ZIP ${groupId}] Failed to create zip:`, error);
+//         next(error);
+//     } finally {
+//         // 4. CLEANUP: Delete the temporary directory and its contents
+//         fs.promises.rm(tempDir, { recursive: true, force: true }).catch(err => {
+//             console.error(`[ZIP ${groupId}] Failed to clean up temporary directory ${tempDir}:`, err);
+//         });
+//     }
+// };
+
+
+// // --- HELPER AND METADATA FUNCTIONS (Unchanged) ---
+// async function getMergedTelegramStream(telegramMessageIds) {
+//     const passThrough = new PassThrough();
+//     (async () => {
+//         for (const messageId of telegramMessageIds) {
+//             try {
+//                 const chunkStream = await telegramService.getFileStream(messageId);
+//                 await new Promise((resolve, reject) => {
+//                     chunkStream.pipe(passThrough, { end: false });
+//                     chunkStream.on('end', resolve);
+//                     chunkStream.on('error', reject);
+//                 });
+//             } catch (err) { passThrough.emit('error', err); break; }
+//         }
+//         passThrough.end();
+//     })().catch(err => passThrough.emit('error', err));
+//     return passThrough;
+// }
+
+// exports.getGroupMetadata = async (req, res, next) => {
+//   try {
+//     const files = await File.find({ groupId: req.params.groupId }).select('originalName size uniqueId');
+//     if (!files || files.length === 0) { return res.status(404).json({ message: 'File group not found.' }); }
+//     res.json(files);
+//   } catch (error) { next(error); }
+// };
+
+// exports.getMyFiles = async (req, res, next) => {
+//   try {
+//     const files = await File.find({ owner: req.user._id }).sort({ createdAt: -1 }).select('originalName size uniqueId createdAt groupId');
+//     res.json(files);
+//   } catch (error) { next(error); }
+// };
+
+
 // server/src/controllers/file.controller.js
 
 const File = require('../models/File');
@@ -528,8 +713,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-// --- UPLOAD AND BACKGROUND ARCHIVAL LOGIC (Correct and Unchanged) ---
-// This part remains the same as our previous correct version.
+// --- UPLOAD & IMMEDIATE TRIGGER LOGIC ---
 exports.uploadFile = async (req, res, next) => {
     let fileDoc;
     try {
@@ -541,20 +725,20 @@ exports.uploadFile = async (req, res, next) => {
         if (!fileName || !fileSize || !groupId || !groupTotal) {
             return res.status(400).json({ message: 'Missing required file metadata headers.' });
         }
-
         fileDoc = new File({
-            originalName: fileName, size: fileSize, owner: req.user ? req.user._id : null, groupId: groupId, groupTotal: groupTotal,
+            originalName: fileName, size: fileSize, owner: req.user ? req.user._id : null, groupId, groupTotal,
         });
-
         const passThrough = new PassThrough();
         req.pipe(passThrough);
         const gDriveFile = await gDriveService.createFile(fileName, req.headers['content-type'], passThrough);
-
         fileDoc.gDriveFileId = gDriveFile.id;
         fileDoc.status = 'IN_DRIVE';
-        fileDoc.driveUploadTimestamp = new Date();
         await fileDoc.save();
-
+        const countInDrive = await File.countDocuments({ groupId, status: 'IN_DRIVE' });
+        if (countInDrive === groupTotal) {
+            console.log(`[GROUP ${groupId}] All ${groupTotal} files are in Drive. Starting immediate transfer to Telegram.`);
+            transferGroupToTelegram(groupId);
+        }
         res.status(201).json({ message: 'File uploaded to Drive successfully.' });
     } catch (error) {
         console.error(`Upload failed for ${fileDoc?.originalName || 'unknown file'}:`, error);
@@ -563,9 +747,73 @@ exports.uploadFile = async (req, res, next) => {
     }
 };
 
-// --- DOWNLOAD LOGIC ---
+// --- BULLETPROOF BACKGROUND TRANSFER LOGIC ---
+async function transferGroupToTelegram(groupId) {
+    const filesInGroup = await File.find({ groupId, status: 'IN_DRIVE' });
+    let allTransfersSucceeded = true;
 
-// This function for single file downloads is correct.
+    console.log(`[GROUP ${groupId}] Starting transfer phase for ${filesInGroup.length} files.`);
+
+    // PHASE 1: TRANSFER ALL FILES. Stop if any single file fails.
+    for (const fileDoc of filesInGroup) {
+        try {
+            await fileDoc.updateOne({ status: 'ARCHIVING' });
+
+            const gDriveStream = await gDriveService.getFileStream(fileDoc.gDriveFileId);
+            const CHUNK_SIZE = 15 * 1024 * 1024;
+            let chunkBuffer = Buffer.alloc(0);
+            const uploadPromises = [];
+            let chunkIndex = 0;
+
+            for await (const data of gDriveStream) {
+                chunkBuffer = Buffer.concat([chunkBuffer, data]);
+                while (chunkBuffer.length >= CHUNK_SIZE) {
+                    const chunkToUpload = chunkBuffer.slice(0, CHUNK_SIZE);
+                    chunkBuffer = chunkBuffer.slice(CHUNK_SIZE);
+                    uploadPromises.push(telegramService.uploadChunk(chunkToUpload, `${fileDoc.originalName}.part${chunkIndex++}`));
+                }
+            }
+            if (chunkBuffer.length > 0) {
+                uploadPromises.push(telegramService.uploadChunk(chunkBuffer, `${fileDoc.originalName}.part${chunkIndex++}`));
+            }
+
+            const messageIds = await Promise.all(uploadPromises);
+
+            await fileDoc.updateOne({ telegramMessageIds: messageIds, status: 'IN_TELEGRAM' });
+            console.log(`[GROUP ${groupId}] SUCCESS: Transferred ${fileDoc.originalName} to Telegram.`);
+
+        } catch (error) {
+            console.error(`[GROUP ${groupId}] FATAL ERROR: Failed to transfer ${fileDoc.originalName}. Aborting group transfer.`, error);
+            await fileDoc.updateOne({ status: 'ERROR' });
+            allTransfersSucceeded = false;
+            break;
+        }
+    }
+
+    // PHASE 2: ATOMIC CLEANUP. Only run if ALL files succeeded.
+    if (allTransfersSucceeded) {
+        console.log(`[GROUP ${groupId}] All transfers successful. Starting cleanup of ${filesInGroup.length} files from Google Drive.`);
+        // NOTE: We refetch the files to ensure we have the correct gDriveFileId for all of them.
+        const successfullyTransferredFiles = await File.find({ groupId, status: 'IN_TELEGRAM' });
+        for (const transferredFile of successfullyTransferredFiles) {
+            if (transferredFile.gDriveFileId) {
+                try {
+                    await gDriveService.deleteFile(transferredFile.gDriveFileId);
+                    console.log(`[GROUP ${groupId}] Deleted ${transferredFile.originalName} from Drive.`);
+                } catch (error) {
+                    console.error(`[GROUP ${groupId}] FAILED to delete ${transferredFile.gDriveFileId} from Drive during cleanup:`, error);
+                }
+            }
+        }
+    } else {
+        console.log(`[GROUP ${groupId}] Transfer failed for at least one file. No files will be deleted from Google Drive.`);
+    }
+
+    console.log(`[GROUP ${groupId}] Finished processing.`);
+}
+
+
+// --- DOWNLOAD AND METADATA LOGIC ---
 exports.downloadFile = async (req, res, next) => {
     try {
         const file = await File.findOne({ uniqueId: req.params.uniqueId });
@@ -584,90 +832,47 @@ exports.downloadFile = async (req, res, next) => {
         }
     } catch (error) { next(error); }
 };
-
-// --- NEW, BULLETPROOF ZIP DOWNLOAD LOGIC ---
 exports.downloadGroupAsZip = async (req, res, next) => {
     const { groupId } = req.params;
-    // Create a unique temporary directory for this download request
     const tempDir = path.join(os.tmpdir(), `zip-${groupId}-${Date.now()}`);
-
     try {
         await fs.promises.mkdir(tempDir, { recursive: true });
-
         const files = await File.find({ groupId }).sort({ createdAt: 1 });
-        if (!files || files.length === 0) {
-            return res.status(404).json({ message: 'No files found.' });
-        }
-
-        console.log(`[ZIP ${groupId}] Starting download of ${files.length} files to temporary storage.`);
-
-        // 1. DOWNLOAD ALL FILES TO THE SERVER'S TEMPORARY FOLDER
+        if (!files || files.length === 0) { return res.status(404).json({ message: 'No files found.' }); }
         for (const file of files) {
             const localFilePath = path.join(tempDir, file.originalName);
             const writer = fs.createWriteStream(localFilePath);
             let sourceStream;
-
             if (file.status === 'IN_TELEGRAM' && file.telegramMessageIds.length > 0) {
                 sourceStream = await getMergedTelegramStream(file.telegramMessageIds);
             } else if ((file.status === 'IN_DRIVE' || file.status === 'ARCHIVING') && file.gDriveFileId) {
                 sourceStream = await gDriveService.getFileStream(file.gDriveFileId);
-            } else {
-                console.warn(`[ZIP ${groupId}] Skipping file ${file.originalName} due to invalid status.`);
-                continue; // Skip this file
-            }
-
+            } else { continue; }
             sourceStream.pipe(writer);
-            // Wait for the file to be completely written to disk
             await new Promise((resolve, reject) => {
-                writer.on('finish', resolve);
-                writer.on('error', reject);
-                sourceStream.on('error', reject); // Propagate stream errors
+                writer.on('finish', resolve); writer.on('error', reject); sourceStream.on('error', reject);
             });
         }
-
-        console.log(`[ZIP ${groupId}] All files downloaded. Starting ZIP creation.`);
-
-        // 2. CREATE THE ZIP FROM THE LOCALLY STORED FILES
         const zipFileName = `${files[0].originalName.split('.')[0] || 'batch'}.zip`;
         const zipFilePath = path.join(tempDir, zipFileName);
         const output = fs.createWriteStream(zipFilePath);
-        const archive = archiver('zip', { zlib: { level: 9 } }); // Use higher compression
-
+        const archive = archiver('zip', { zlib: { level: 9 } });
         archive.pipe(output);
-        // Add all files from the temporary directory into the zip
         archive.directory(tempDir, false);
         await archive.finalize();
-
-        // This promise resolves when the ZIP file is fully written to disk
         await new Promise((resolve, reject) => {
-          output.on('close', resolve);
-          archive.on('error', reject);
+            output.on('close', resolve); archive.on('error', reject);
         });
-
-        console.log(`[ZIP ${groupId}] ZIP file created successfully.`);
-
-        // 3. STREAM THE COMPLETED ZIP FILE TO THE USER
         const zipStats = await fs.promises.stat(zipFilePath);
         res.setHeader('Content-Disposition', `attachment; filename="${zipFileName}"`);
         res.setHeader('Content-Type', 'application/zip');
         res.setHeader('Content-Length', zipStats.size);
-
         const zipStream = fs.createReadStream(zipFilePath);
         zipStream.pipe(res);
-
     } catch (error) {
-        console.error(`[ZIP ${groupId}] Failed to create zip:`, error);
         next(error);
-    } finally {
-        // 4. CLEANUP: Delete the temporary directory and its contents
-        fs.promises.rm(tempDir, { recursive: true, force: true }).catch(err => {
-            console.error(`[ZIP ${groupId}] Failed to clean up temporary directory ${tempDir}:`, err);
-        });
-    }
+    } finally { fs.promises.rm(tempDir, { recursive: true, force: true }); }
 };
-
-
-// --- HELPER AND METADATA FUNCTIONS (Unchanged) ---
 async function getMergedTelegramStream(telegramMessageIds) {
     const passThrough = new PassThrough();
     (async () => {
@@ -685,18 +890,16 @@ async function getMergedTelegramStream(telegramMessageIds) {
     })().catch(err => passThrough.emit('error', err));
     return passThrough;
 }
-
 exports.getGroupMetadata = async (req, res, next) => {
-  try {
-    const files = await File.find({ groupId: req.params.groupId }).select('originalName size uniqueId');
-    if (!files || files.length === 0) { return res.status(404).json({ message: 'File group not found.' }); }
-    res.json(files);
-  } catch (error) { next(error); }
+    try {
+        const files = await File.find({ groupId: req.params.groupId }).select('originalName size uniqueId');
+        if (!files || files.length === 0) { return res.status(404).json({ message: 'File group not found.' }); }
+        res.json(files);
+    } catch (error) { next(error); }
 };
-
 exports.getMyFiles = async (req, res, next) => {
-  try {
-    const files = await File.find({ owner: req.user._id }).sort({ createdAt: -1 }).select('originalName size uniqueId createdAt groupId');
-    res.json(files);
-  } catch (error) { next(error); }
+    try {
+        const files = await File.find({ owner: req.user._id }).sort({ createdAt: -1 }).select('originalName size uniqueId createdAt groupId');
+        res.json(files);
+    } catch (error) { next(error); }
 };

@@ -213,6 +213,87 @@
 //     return response.data.files || [];
 // };
 
+// // server/src/services/googleDrive.service.js
+
+// const { google } = require('googleapis');
+// const fs = require('fs');
+// const path = require('path');
+
+// // --- Configuration ---
+// const SCOPES = ['https://www.googleapis.com/auth/drive'];
+// const GDRIVE_FOLDER_ID = process.env.GDRIVE_FOLDER_ID;
+
+// // --- DYNAMIC CREDENTIALS LOADER ---
+// function loadCredentials() {
+//     if (process.env.NODE_ENV === 'production' && process.env.GOOGLE_SERVICE_ACCOUNT_KEY_JSON) {
+//         try {
+//             console.log("Loading credentials from GOOGLE_SERVICE_ACCOUNT_KEY_JSON environment variable.");
+//             return JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY_JSON);
+//         } catch (error) {
+//             console.error("FATAL: Could not parse GOOGLE_SERVICE_ACCOUNT_KEY_JSON.", error);
+//             throw new Error("Invalid GOOGLE_SERVICE_ACCOUNT_KEY_JSON environment variable.");
+//         }
+//     }
+//     else if (process.env.GOOGLE_CREDENTIALS_PATH) {
+//         try {
+//             // This builds an absolute path from the root of where the node process is running
+//             const keyFilePath = path.resolve(process.cwd(), process.env.GOOGLE_CREDENTIALS_PATH);
+//             console.log(`Loading credentials from resolved file path: ${keyFilePath}`);
+//             const keyFileContent = fs.readFileSync(keyFilePath, 'utf8');
+//             return JSON.parse(keyFileContent);
+//         } catch (error) {
+//             console.error(`FATAL: Could not read or parse the credentials file at ${process.env.GOOGLE_CREDENTIALS_PATH}.`, error);
+//             throw new Error("Invalid GOOGLE_CREDENTIALS_PATH or file content.");
+//         }
+//     }
+//     else {
+//         throw new Error("FATAL: Google credentials not configured. Set either GOOGLE_SERVICE_ACCOUNT_KEY_JSON (for production) or GOOGLE_CREDENTIALS_PATH (for development).");
+//     }
+// }
+
+// const credentials = loadCredentials();
+
+// // --- Authentication Setup ---
+// const auth = new google.auth.GoogleAuth({
+//   credentials,
+//   scopes: SCOPES,
+// });
+
+// const drive = google.drive({ version: 'v3', auth });
+
+// // The rest of the file is correct and remains unchanged.
+// exports.createFile = async (fileName, mimeType, fileStream) => {
+//   const response = await drive.files.create({
+//     requestBody: { name: fileName, parents: [GDRIVE_FOLDER_ID] },
+//     media: { mimeType: mimeType, body: fileStream },
+//   });
+//   return response.data;
+// };
+
+// exports.getFileStream = async (fileId) => {
+//   const response = await drive.files.get(
+//     { fileId: fileId, alt: 'media' },
+//     { 
+//       responseType: 'stream',
+//       timeout: 5 * 60 * 1000
+//     }
+//   );
+//   return response.data;
+// };
+
+// exports.deleteFile = async (fileId) => {
+//   await drive.files.delete({ fileId: fileId });
+// };
+
+// exports.listAllFiles = async () => {
+//     const response = await drive.files.list({
+//         q: `'${GDRIVE_FOLDER_ID}' in parents and trashed = false`,
+//         fields: 'files(id, name)',
+//     });
+//     return response.data.files || [];
+// };
+
+
 // server/src/services/googleDrive.service.js
 
 const { google } = require('googleapis');
@@ -225,6 +306,7 @@ const GDRIVE_FOLDER_ID = process.env.GDRIVE_FOLDER_ID;
 
 // --- DYNAMIC CREDENTIALS LOADER ---
 function loadCredentials() {
+    // For production (like Render), use the environment variable
     if (process.env.NODE_ENV === 'production' && process.env.GOOGLE_SERVICE_ACCOUNT_KEY_JSON) {
         try {
             console.log("Loading credentials from GOOGLE_SERVICE_ACCOUNT_KEY_JSON environment variable.");
@@ -234,18 +316,19 @@ function loadCredentials() {
             throw new Error("Invalid GOOGLE_SERVICE_ACCOUNT_KEY_JSON environment variable.");
         }
     }
+    // For local development, use the file path
     else if (process.env.GOOGLE_CREDENTIALS_PATH) {
         try {
-            // This builds an absolute path from the root of where the node process is running
             const keyFilePath = path.resolve(process.cwd(), process.env.GOOGLE_CREDENTIALS_PATH);
             console.log(`Loading credentials from resolved file path: ${keyFilePath}`);
             const keyFileContent = fs.readFileSync(keyFilePath, 'utf8');
             return JSON.parse(keyFileContent);
         } catch (error) {
-            console.error(`FATAL: Could not read or parse the credentials file at ${process.env.GOOGLE_CREDENTIALS_PATH}.`, error);
+            console.error(`FATAL: Could not read or parse credentials file at ${process.env.GOOGLE_CREDENTIALS_PATH}.`, error);
             throw new Error("Invalid GOOGLE_CREDENTIALS_PATH or file content.");
         }
     }
+    // Fail if no credentials are found
     else {
         throw new Error("FATAL: Google credentials not configured. Set either GOOGLE_SERVICE_ACCOUNT_KEY_JSON (for production) or GOOGLE_CREDENTIALS_PATH (for development).");
     }
@@ -261,7 +344,6 @@ const auth = new google.auth.GoogleAuth({
 
 const drive = google.drive({ version: 'v3', auth });
 
-// The rest of the file is correct and remains unchanged.
 exports.createFile = async (fileName, mimeType, fileStream) => {
   const response = await drive.files.create({
     requestBody: { name: fileName, parents: [GDRIVE_FOLDER_ID] },
@@ -275,7 +357,8 @@ exports.getFileStream = async (fileId) => {
     { fileId: fileId, alt: 'media' },
     { 
       responseType: 'stream',
-      timeout: 5 * 60 * 1000
+      // UPDATED TIMEOUT: 2 hours (120 minutes * 60 seconds * 1000 milliseconds)
+      timeout: 120 * 60 * 1000 
     }
   );
   return response.data;

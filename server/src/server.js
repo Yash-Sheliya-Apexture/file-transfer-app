@@ -290,8 +290,170 @@
 //    console.log(`Finished processing group ${groupId}.`);
 // }
 
-// server/src/server.js
+// // server/src/server.js
 
+// const path = require('path');
+// require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
+// const express = require('express');
+// const cors = require('cors');
+// const connectDB = require('./utils/database');
+
+// const authRoutes = require('./routes/auth.routes');
+// const userRoutes = require('./routes/user.routes');
+// const fileRoutes = require('./routes/file.routes');
+// const errorMiddleware = require('./middleware/error.middleware');
+// const gDriveService = require('./services/googleDrive.service');
+// const telegramService = require('./services/telegram.service');
+// const File = require('./models/File');
+
+// connectDB();
+
+// const app = express();
+
+// // --- CORS CONFIGURATION FOR PRODUCTION ---
+// // IMPORTANT: You must add your Vercel URL to this list after deploying the frontend.
+// const whitelist = [
+//     'http://localhost:3000', // For local development
+//     process.env.FRONTEND_URL, // This will be your Vercel URL
+// ];
+
+// const corsOptions = {
+//     origin: function (origin, callback) {
+//         // Allow requests with no origin (like mobile apps, Postman, or curl)
+//         // and requests from our whitelisted domains.
+//         if (!origin || whitelist.indexOf(origin) !== -1) {
+//             callback(null, true);
+//         } else {
+//             console.error('CORS Error: Request from origin', origin, 'is not allowed.');
+//             callback(new Error('Not allowed by CORS'));
+//         }
+//     },
+//     credentials: true,
+// };
+
+// app.use(cors(corsOptions));
+// // --- END CORS CONFIGURATION ---
+
+// app.use(express.json());
+
+
+// // --- HEALTH CHECK ENDPOINT ---
+// app.get('/health', (req, res) => {
+//     res.status(200).send('OK');
+// });
+
+
+// app.use('/api/auth', authRoutes);
+// app.use('/api/users', userRoutes);
+// app.use('/api/files', fileRoutes);
+
+// app.use(errorMiddleware);
+
+// const PORT = process.env.PORT || 5000;
+// app.listen(PORT, () => {
+//     console.log(`Server running on port ${PORT}`);
+    
+//     // Set the interval for the archival job (5 minutes is good for production)
+//     const ARCHIVE_INTERVAL_MS = 5 * 60 * 1000;
+//     console.log(`Starting archival janitor. Will run every ${ARCHIVE_INTERVAL_MS / 1000 / 60} minutes.`);
+    
+//     // Run the job periodically
+//     setInterval(runArchivalProcess, ARCHIVE_INTERVAL_MS);
+    
+//     // Run it once on startup after a short delay
+//     setTimeout(runArchivalProcess, 10000);
+// });
+
+// // --- ARCHIVAL JANITOR LOGIC ---
+// async function runArchivalProcess() {
+//     console.log('ARCHIVAL JANITOR: Running job...');
+//     const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+
+//     try {
+//         const archivableGroups = await File.aggregate([
+//             { $match: { status: 'IN_DRIVE', driveUploadTimestamp: { $ne: null } } },
+//             {
+//                 $group: {
+//                     _id: '$groupId',
+//                     countInDrive: { $sum: 1 },
+//                     groupTotal: { $first: '$groupTotal' },
+//                     lastUploadTime: { $max: '$driveUploadTimestamp' }
+//                 }
+//             },
+//             {
+//                 $match: {
+//                     $expr: { $eq: ['$countInDrive', '$groupTotal'] },
+//                     lastUploadTime: { $lte: fiveMinutesAgo }
+//                 }
+//             }
+//         ]);
+
+//         if (archivableGroups.length === 0) {
+//             console.log('ARCHIVAL JANITOR: No complete groups are old enough to archive.');
+//             return;
+//         }
+
+//         console.log(`ARCHIVAL JANITOR: Found ${archivableGroups.length} group(s) to process.`);
+//         for (const group of archivableGroups) {
+//             await transferGroupToTelegram(group._id);
+//         }
+
+//     } catch (error) {
+//         console.error('ARCHIVAL JANITOR: Error during group identification:', error);
+//     }
+//     console.log('ARCHIVAL JANITOR: Job finished.');
+// }
+
+// async function transferGroupToTelegram(groupId) {
+//   const filesInGroup = await File.find({ groupId, status: 'IN_DRIVE' });
+//   const successfullyTransferred = [];
+
+//   console.log(`ARCHIVAL JANITOR: Starting transfer for group ${groupId}.`);
+//   // PHASE 1: TRANSFER
+//   for (const fileDoc of filesInGroup) {
+//     try {
+//       await fileDoc.updateOne({ status: 'ARCHIVING' });
+//       const gDriveStream = await gDriveService.getFileStream(fileDoc.gDriveFileId);
+//       const CHUNK_SIZE = 15 * 1024 * 1024;
+//       let chunkBuffer = Buffer.alloc(0);
+//       const uploadPromises = [];
+//       let chunkIndex = 0;
+//       for await (const data of gDriveStream) {
+//         chunkBuffer = Buffer.concat([chunkBuffer, data]);
+//         while (chunkBuffer.length >= CHUNK_SIZE) {
+//           const chunkToUpload = chunkBuffer.slice(0, CHUNK_SIZE);
+//           chunkBuffer = chunkBuffer.slice(CHUNK_SIZE);
+//           uploadPromises.push(telegramService.uploadChunk(chunkToUpload, `${fileDoc.originalName}.part${chunkIndex++}`));
+//         }
+//       }
+//       if (chunkBuffer.length > 0) {
+//         uploadPromises.push(telegramService.uploadChunk(chunkBuffer, `${fileDoc.originalName}.part${chunkIndex++}`));
+//       }
+//       const messageIds = await Promise.all(uploadPromises);
+//       await fileDoc.updateOne({ telegramMessageIds: messageIds, status: 'IN_TELEGRAM' });
+//       successfullyTransferred.push(fileDoc);
+//     } catch (error) {
+//       console.error(`Failed to transfer ${fileDoc.originalName}:`, error);
+//       await fileDoc.updateOne({ status: 'ERROR' });
+//     }
+//   }
+
+//   // PHASE 2: CLEANUP
+//   if (successfullyTransferred.length > 0) {
+//       console.log(`Starting cleanup of ${successfullyTransferred.length} files from Google Drive for group ${groupId}.`);
+//       for (const transferredFile of successfullyTransferred) {
+//           try {
+//               await gDriveService.deleteFile(transferredFile.gDriveFileId);
+//           } catch(error) {
+//               console.error(`Failed to delete file ${transferredFile.gDriveFileId} from Drive:`, error);
+//           }
+//       }
+//   }
+//    console.log(`Finished processing group ${groupId}.`);
+// }
+
+
+// server/src/server.js
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 const express = require('express');
@@ -303,151 +465,73 @@ const userRoutes = require('./routes/user.routes');
 const fileRoutes = require('./routes/file.routes');
 const errorMiddleware = require('./middleware/error.middleware');
 const gDriveService = require('./services/googleDrive.service');
-const telegramService = require('./services/telegram.service');
 const File = require('./models/File');
 
+// Connect to Database
 connectDB();
 
 const app = express();
 
-// --- CORS CONFIGURATION FOR PRODUCTION ---
-// IMPORTANT: You must add your Vercel URL to this list after deploying the frontend.
+// CORS Configuration
 const whitelist = [
-    'http://localhost:3000', // For local development
-    process.env.FRONTEND_URL, // This will be your Vercel URL
-];
+    'http://localhost:3000',
+    process.env.FRONTEND_URL,
+].filter(Boolean); // Filter out undefined values
 
 const corsOptions = {
     origin: function (origin, callback) {
-        // Allow requests with no origin (like mobile apps, Postman, or curl)
-        // and requests from our whitelisted domains.
         if (!origin || whitelist.indexOf(origin) !== -1) {
             callback(null, true);
         } else {
-            console.error('CORS Error: Request from origin', origin, 'is not allowed.');
             callback(new Error('Not allowed by CORS'));
         }
     },
     credentials: true,
 };
-
 app.use(cors(corsOptions));
-// --- END CORS CONFIGURATION ---
-
 app.use(express.json());
 
-
-// --- HEALTH CHECK ENDPOINT ---
+// Health Check Endpoint
 app.get('/health', (req, res) => {
     res.status(200).send('OK');
 });
 
-
+// API Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/files', fileRoutes);
 
+// Error Handling Middleware
 app.use(errorMiddleware);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
-    
-    // Set the interval for the archival job (5 minutes is good for production)
-    const ARCHIVE_INTERVAL_MS = 5 * 60 * 1000;
-    console.log(`Starting archival janitor. Will run every ${ARCHIVE_INTERVAL_MS / 1000 / 60} minutes.`);
-    
-    // Run the job periodically
-    setInterval(runArchivalProcess, ARCHIVE_INTERVAL_MS);
-    
-    // Run it once on startup after a short delay
-    setTimeout(runArchivalProcess, 10000);
+    // Run the orphan cleanup function on server start
+    runDriveCleanup();
 });
 
-// --- ARCHIVAL JANITOR LOGIC ---
-async function runArchivalProcess() {
-    console.log('ARCHIVAL JANITOR: Running job...');
-    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
-
+// This function is still useful for cleaning up failed/orphaned uploads.
+async function runDriveCleanup() {
+    console.log('Running Google Drive orphan cleanup job...');
     try {
-        const archivableGroups = await File.aggregate([
-            { $match: { status: 'IN_DRIVE', driveUploadTimestamp: { $ne: null } } },
-            {
-                $group: {
-                    _id: '$groupId',
-                    countInDrive: { $sum: 1 },
-                    groupTotal: { $first: '$groupTotal' },
-                    lastUploadTime: { $max: '$driveUploadTimestamp' }
-                }
-            },
-            {
-                $match: {
-                    $expr: { $eq: ['$countInDrive', '$groupTotal'] },
-                    lastUploadTime: { $lte: fiveMinutesAgo }
-                }
-            }
-        ]);
-
-        if (archivableGroups.length === 0) {
-            console.log('ARCHIVAL JANITOR: No complete groups are old enough to archive.');
+        const driveFiles = await gDriveService.listAllFiles();
+        if (!driveFiles || driveFiles.length === 0) {
+            console.log('Drive folder is already clean. No action needed.');
             return;
         }
 
-        console.log(`ARCHIVAL JANITOR: Found ${archivableGroups.length} group(s) to process.`);
-        for (const group of archivableGroups) {
-            await transferGroupToTelegram(group._id);
+        for (const driveFile of driveFiles) {
+            const dbFile = await File.findOne({ gDriveFileId: driveFile.id });
+            // Delete if not in DB, or if it's already marked as IN_TELEGRAM or ERROR
+            if (!dbFile || dbFile.status === 'IN_TELEGRAM' || dbFile.status === 'ERROR') {
+                let reason = !dbFile ? 'not tracked in DB' : `status is '${dbFile.status}'`;
+                console.log(`Found orphaned file in Drive: ${driveFile.name} (${driveFile.id}). Reason: ${reason}. Deleting...`);
+                await gDriveService.deleteFile(driveFile.id);
+            }
         }
-
+        console.log('Google Drive orphan cleanup job finished.');
     } catch (error) {
-        console.error('ARCHIVAL JANITOR: Error during group identification:', error);
+        console.error('Error during Google Drive cleanup:', error);
     }
-    console.log('ARCHIVAL JANITOR: Job finished.');
-}
-
-async function transferGroupToTelegram(groupId) {
-  const filesInGroup = await File.find({ groupId, status: 'IN_DRIVE' });
-  const successfullyTransferred = [];
-
-  console.log(`ARCHIVAL JANITOR: Starting transfer for group ${groupId}.`);
-  // PHASE 1: TRANSFER
-  for (const fileDoc of filesInGroup) {
-    try {
-      await fileDoc.updateOne({ status: 'ARCHIVING' });
-      const gDriveStream = await gDriveService.getFileStream(fileDoc.gDriveFileId);
-      const CHUNK_SIZE = 15 * 1024 * 1024;
-      let chunkBuffer = Buffer.alloc(0);
-      const uploadPromises = [];
-      let chunkIndex = 0;
-      for await (const data of gDriveStream) {
-        chunkBuffer = Buffer.concat([chunkBuffer, data]);
-        while (chunkBuffer.length >= CHUNK_SIZE) {
-          const chunkToUpload = chunkBuffer.slice(0, CHUNK_SIZE);
-          chunkBuffer = chunkBuffer.slice(CHUNK_SIZE);
-          uploadPromises.push(telegramService.uploadChunk(chunkToUpload, `${fileDoc.originalName}.part${chunkIndex++}`));
-        }
-      }
-      if (chunkBuffer.length > 0) {
-        uploadPromises.push(telegramService.uploadChunk(chunkBuffer, `${fileDoc.originalName}.part${chunkIndex++}`));
-      }
-      const messageIds = await Promise.all(uploadPromises);
-      await fileDoc.updateOne({ telegramMessageIds: messageIds, status: 'IN_TELEGRAM' });
-      successfullyTransferred.push(fileDoc);
-    } catch (error) {
-      console.error(`Failed to transfer ${fileDoc.originalName}:`, error);
-      await fileDoc.updateOne({ status: 'ERROR' });
-    }
-  }
-
-  // PHASE 2: CLEANUP
-  if (successfullyTransferred.length > 0) {
-      console.log(`Starting cleanup of ${successfullyTransferred.length} files from Google Drive for group ${groupId}.`);
-      for (const transferredFile of successfullyTransferred) {
-          try {
-              await gDriveService.deleteFile(transferredFile.gDriveFileId);
-          } catch(error) {
-              console.error(`Failed to delete file ${transferredFile.gDriveFileId} from Drive:`, error);
-          }
-      }
-  }
-   console.log(`Finished processing group ${groupId}.`);
 }

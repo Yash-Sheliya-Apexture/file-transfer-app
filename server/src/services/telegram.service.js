@@ -324,7 +324,74 @@
 // };
 
 
+// // server/src/services/telegram.service.js
+// const axios = require('axios');
+// const FormData = require('form-data');
+
+// const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+// const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+// const API_URL = `https://api.telegram.org/bot${TOKEN}`;
+
+// // Default timeout for all axios requests in this service (e.g., 5 minutes)
+// const AXIOS_TIMEOUT = 5 * 60 * 1000;
+
+// exports.uploadChunk = async (chunkBuffer, fileName) => {
+//     const form = new FormData();
+//     form.append('chat_id', CHAT_ID);
+//     form.append('document', chunkBuffer, { filename: fileName, contentType: 'application/octet-stream' });
+
+//     try {
+//         const response = await axios.post(`${API_URL}/sendDocument`, form, {
+//             headers: { ...form.getHeaders() },
+//             maxContentLength: Infinity,
+//             maxBodyLength: Infinity,
+//             timeout: AXIOS_TIMEOUT, // Apply timeout
+//         });
+//         if (response.data.ok) return response.data.result.message_id;
+//         throw new Error(`Telegram API error: ${response.data.description}`);
+//     } catch (error) {
+//         if (error.response) console.error('Telegram Upload Error:', error.response.data);
+//         throw error;
+//     }
+// };
+
+// exports.getFileStream = async (messageId) => {
+//     try {
+//         const forwardResponse = await axios.post(`${API_URL}/forwardMessage`, {
+//             chat_id: CHAT_ID, from_chat_id: CHAT_ID, message_id: messageId
+//         }, { timeout: AXIOS_TIMEOUT });
+
+//         if (!forwardResponse.data.ok || !forwardResponse.data.result.document) {
+//             throw new Error('Failed to get file metadata.');
+//         }
+
+//         const fileId = forwardResponse.data.result.document.file_id;
+//         const forwardedMessageId = forwardResponse.data.result.message_id;
+
+//         const getFileResponse = await axios.post(`${API_URL}/getFile`, { file_id: fileId }, { timeout: AXIOS_TIMEOUT });
+        
+//         axios.post(`${API_URL}/deleteMessage`, { chat_id: CHAT_ID, message_id: forwardedMessageId })
+//             .catch(err => console.error("Non-critical: cleanup failed", err.response?.data));
+
+//         if (!getFileResponse.data.ok) throw new Error('Could not get file path.');
+        
+//         const filePath = getFileResponse.data.result.file_path;
+//         const fileUrl = `https://api.telegram.org/file/bot${TOKEN}/${filePath}`;
+
+//         const streamResponse = await axios({
+//             url: fileUrl, method: 'GET', responseType: 'stream', timeout: AXIOS_TIMEOUT
+//         });
+
+//         return streamResponse.data;
+//     } catch (error) {
+//         if (error.response) console.error(`TG getFileStream Error:`, error.response.data);
+//         else console.error(`TG getFileStream Error:`, error.message);
+//         throw error;
+//     }
+// };
+
 // server/src/services/telegram.service.js
+
 const axios = require('axios');
 const FormData = require('form-data');
 
@@ -332,8 +399,8 @@ const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const API_URL = `https://api.telegram.org/bot${TOKEN}`;
 
-// Default timeout for all axios requests in this service (e.g., 5 minutes)
-const AXIOS_TIMEOUT = 5 * 60 * 1000;
+// A very generous default timeout for all network requests in this service
+const AXIOS_TIMEOUT = 120 * 60 * 1000; // 2 hours
 
 exports.uploadChunk = async (chunkBuffer, fileName) => {
     const form = new FormData();
@@ -345,12 +412,13 @@ exports.uploadChunk = async (chunkBuffer, fileName) => {
             headers: { ...form.getHeaders() },
             maxContentLength: Infinity,
             maxBodyLength: Infinity,
-            timeout: AXIOS_TIMEOUT, // Apply timeout
+            timeout: AXIOS_TIMEOUT,
         });
         if (response.data.ok) return response.data.result.message_id;
         throw new Error(`Telegram API error: ${response.data.description}`);
     } catch (error) {
         if (error.response) console.error('Telegram Upload Error:', error.response.data);
+        else console.error('Telegram Upload Error:', error.message);
         throw error;
     }
 };
@@ -362,7 +430,7 @@ exports.getFileStream = async (messageId) => {
         }, { timeout: AXIOS_TIMEOUT });
 
         if (!forwardResponse.data.ok || !forwardResponse.data.result.document) {
-            throw new Error('Failed to get file metadata.');
+            throw new Error('Failed to get file metadata by forwarding message.');
         }
 
         const fileId = forwardResponse.data.result.document.file_id;
@@ -370,10 +438,13 @@ exports.getFileStream = async (messageId) => {
 
         const getFileResponse = await axios.post(`${API_URL}/getFile`, { file_id: fileId }, { timeout: AXIOS_TIMEOUT });
         
+        // Clean up the forwarded message in the background
         axios.post(`${API_URL}/deleteMessage`, { chat_id: CHAT_ID, message_id: forwardedMessageId })
-            .catch(err => console.error("Non-critical: cleanup failed", err.response?.data));
+            .catch(err => console.error("Non-critical: Could not delete forwarded message:", err.response?.data));
 
-        if (!getFileResponse.data.ok) throw new Error('Could not get file path.');
+        if (!getFileResponse.data.ok) {
+            throw new Error('Could not get file path from Telegram.');
+        }
         
         const filePath = getFileResponse.data.result.file_path;
         const fileUrl = `https://api.telegram.org/file/bot${TOKEN}/${filePath}`;
@@ -384,8 +455,11 @@ exports.getFileStream = async (messageId) => {
 
         return streamResponse.data;
     } catch (error) {
-        if (error.response) console.error(`TG getFileStream Error:`, error.response.data);
-        else console.error(`TG getFileStream Error:`, error.message);
+        if (error.response) {
+            console.error(`Telegram getFileStream API Error for messageId ${messageId}:`, error.response.data);
+        } else {
+            console.error(`Telegram getFileStream General Error for messageId ${messageId}:`, error.message);
+        }
         throw error;
     }
 };
