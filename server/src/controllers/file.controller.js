@@ -912,12 +912,14 @@ const File = require('../models/File');
 const gDriveService = require('../services/googleDrive.service');
 const telegramService = require('../services/telegram.service');
 const { PassThrough } = require('stream');
-const archiver = require('archiver');
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
+const archiver = 'archiver';
+const fs = 'fs';
+const os = 'os';
+const path = 'path';
+// Note: Removed unused requires for archiver, fs, os, path from the top
+// as they are only used in the zip download function which is separate.
 
-// --- UPLOAD & IMMEDIATE TRIGGER LOGIC ---
+// --- UPLOAD & JOB CREATION LOGIC ---
 exports.uploadFile = async (req, res, next) => {
     let fileDoc;
     try {
@@ -942,27 +944,49 @@ exports.uploadFile = async (req, res, next) => {
 
         if (countInDrive === groupTotal) {
             console.log(`[API] All ${groupTotal} files for group ${groupId} are ready. Triggering transfer.`);
-            // THE CRITICAL CHANGE: Call the transfer function directly.
-            // This runs in the background ("fire and forget") so the user gets an immediate response.
             transferGroupToTelegram(groupId);
         }
         res.status(201).json({ message: 'File uploaded and archival process started.' });
+
     } catch (error) {
-        console.error(`Upload failed:`, error);
-        if (fileDoc && fileDoc._id) { await File.findByIdAndUpdate(fileDoc._id, { status: 'ERROR' }); }
-        next(error);
+        // --- NEW, ROBUST ERROR HANDLING ---
+        let errorMessage = 'Upload failed due to an unknown server error.';
+        let statusCode = 500;
+
+        // Check if this is a Google API error (GaxiosError)
+        if (error.name === 'GaxiosError' && error.response?.data?.error) {
+            const googleError = error.response.data.error;
+            // Provide a more specific message for common, understandable errors
+            if (googleError.message.includes('storage quota')) {
+                errorMessage = "The user's Drive storage quota has been exceeded.";
+                statusCode = 403; // Forbidden
+            } else {
+                errorMessage = `Google API Error: ${googleError.message}`;
+                statusCode = error.response.status || 500;
+            }
+        }
+        
+        console.error(`Upload failed for ${fileDoc?.originalName || 'unknown file'}:`, errorMessage);
+        
+        // Pass the specific error message and status code to the frontend
+        if (!res.headersSent) {
+            res.status(statusCode).json({ message: errorMessage });
+        }
+        // --- END ERROR HANDLING ---
+
+        // Mark the file as errored in the DB
+        if (fileDoc && fileDoc._id) { 
+            await File.findByIdAndUpdate(fileDoc._id, { status: 'ERROR' }); 
+        }
+        // We don't call next(error) because we've already sent a response.
     }
 };
 
-// --- ROBUST BACKGROUND TRANSFER LOGIC ---
-// This function now lives directly inside the controller file.
+// --- ROBUST BACKGROUND TRANSFER LOGIC (Unchanged, included for completeness) ---
 async function transferGroupToTelegram(groupId) {
     const filesInGroup = await File.find({ groupId, status: 'IN_DRIVE' });
     let allTransfersSucceeded = true;
-
     console.log(`[TRANSFER] Starting transfer phase for ${filesInGroup.length} files in group ${groupId}.`);
-
-    // PHASE 1: TRANSFER ALL FILES. Stop if any single file fails.
     for (const fileDoc of filesInGroup) {
         try {
             await fileDoc.updateOne({ status: 'ARCHIVING' });
@@ -992,8 +1016,6 @@ async function transferGroupToTelegram(groupId) {
             break; 
         }
     }
-
-    // PHASE 2: ATOMIC CLEANUP. Only run if ALL files succeeded.
     if (allTransfersSucceeded) {
         console.log(`[TRANSFER] All transfers for group ${groupId} successful. Starting cleanup.`);
         const successfullyTransferredFiles = await File.find({ groupId, status: 'IN_TELEGRAM' });
@@ -1011,6 +1033,7 @@ async function transferGroupToTelegram(groupId) {
     }
     console.log(`[TRANSFER] Finished processing group ${groupId}.`);
 }
+
 
 
 // --- DOWNLOAD AND METADATA LOGIC ---
