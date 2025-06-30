@@ -7,7 +7,7 @@
 
 # Service Account Key
 # CRITICAL: Never commit your Google Service Account key to a public repository.
-# /src/config/service-account-key.json
+/src/config/service-account-key.json
 
 # Log files
 *.log
