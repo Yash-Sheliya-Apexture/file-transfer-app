@@ -1190,7 +1190,6 @@ const os = require('os');
 const path = require('path');
 
 // --- UPLOAD & IMMEDIATE TRIGGER LOGIC ---
-// This function receives the raw request body as a stream.
 exports.uploadFile = async (req, res, next) => {
     let fileDoc;
     try {
@@ -1207,15 +1206,19 @@ exports.uploadFile = async (req, res, next) => {
             originalName: fileName, size: fileSize, owner: req.user ? req.user._id : null, groupId, groupTotal,
         });
 
-        // The PassThrough stream allows us to pipe the incoming request directly to Google Drive.
         const passThrough = new PassThrough();
         req.pipe(passThrough);
 
         // Create the file on Google Drive using the stream
         const gDriveFile = await gDriveService.createFile(fileName, req.headers['content-type'], passThrough);
         
-        // Immediately transfer ownership to your personal account
-        await gDriveService.transferOwnership(gDriveFile.id);
+        // --- RESILIENT OWNERSHIP TRANSFER ---
+        // This is a "fire-and-forget" call. We trigger the ownership transfer
+        // but DO NOT `await` its completion. If it fails (e.g., due to the
+        // "Consent required" error), it will log the error on the server but
+        // will NOT stop the rest of this function from executing.
+        gDriveService.transferOwnership(gDriveFile.id);
+        // --- END OF FIX ---
 
         fileDoc.gDriveFileId = gDriveFile.id;
         fileDoc.status = 'IN_DRIVE';
@@ -1228,7 +1231,9 @@ exports.uploadFile = async (req, res, next) => {
             transferGroupToTelegram(groupId); 
         }
         
-        res.status(201).json({ message: 'File uploaded and ownership transferred successfully.' });
+        // This response is now sent immediately after the file is received,
+        // making the frontend feel much faster.
+        res.status(201).json({ message: 'File upload to Drive initiated successfully.' });
 
     } catch (error) {
         console.error(`Upload failed for ${fileDoc?.originalName || 'unknown file'}:`, error);
