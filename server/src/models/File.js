@@ -64,7 +64,7 @@
 // module.exports = mongoose.model('File', FileSchema);
 
 
-
+// server/src/models/File.js
 const mongoose = require('mongoose');
 const { v4: uuidv4 } = require('uuid');
 

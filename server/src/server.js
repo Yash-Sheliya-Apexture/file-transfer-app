@@ -445,6 +445,105 @@
 //    console.log(`Finished processing group ${groupId}.`);
 // }
 
+
+
+// // server/src/server.js
+// const path = require('path');
+// require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
+// const express = require('express');
+// const cors = require('cors');
+// const connectDB = require('./utils/database');
+
+// const authRoutes = require('./routes/auth.routes');
+// const userRoutes = require('./routes/user.routes');
+// const fileRoutes = require('./routes/file.routes');
+// const errorMiddleware = require('./middleware/error.middleware');
+// const File = require('./models/File');
+// // Import the robust transfer function from the controller
+// const { transferGroupToTelegram } = require('./controllers/file.controller');
+
+// connectDB();
+
+// const app = express();
+
+// const whitelist = [
+//     'http://localhost:3000',
+//     process.env.FRONTEND_URL,
+// ].filter(Boolean); // Filter out undefined/null values
+
+// const corsOptions = {
+//     origin: function (origin, callback) {
+//         if (!origin || whitelist.indexOf(origin) !== -1) {
+//             callback(null, true);
+//         } else {
+//             console.error('CORS Error: Request from origin', origin, 'is not allowed.');
+//             callback(new Error('Not allowed by CORS'));
+//         }
+//     },
+//     credentials: true,
+// };
+
+// app.use(cors(corsOptions));
+// app.use(express.json());
+
+// app.use('/api/auth', authRoutes);
+// app.use('/api/users', userRoutes);
+// app.use('/api/files', fileRoutes);
+
+// app.use(errorMiddleware);
+
+// const PORT = process.env.PORT || 5000;
+// app.listen(PORT, () => {
+//     console.log(`Server running on port ${PORT}`);
+    
+//     const ARCHIVE_INTERVAL_MS = 5 * 60 * 1000;
+//     console.log(`Starting archival janitor. Will run every ${ARCHIVE_INTERVAL_MS / 1000 / 60} minutes.`);
+    
+//     setInterval(runArchivalProcess, ARCHIVE_INTERVAL_MS);
+//     setTimeout(runArchivalProcess, 10000);
+// });
+
+// async function runArchivalProcess() {
+//     console.log('ARCHIVAL JANITOR: Running job...');
+//     const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+
+//     try {
+//         const archivableGroups = await File.aggregate([
+//             { $match: { status: 'IN_DRIVE', driveUploadTimestamp: { $ne: null } } },
+//             {
+//                 $group: {
+//                     _id: '$groupId',
+//                     countInDrive: { $sum: 1 },
+//                     groupTotal: { $first: '$groupTotal' },
+//                     lastUploadTime: { $max: '$driveUploadTimestamp' }
+//                 }
+//             },
+//             {
+//                 $match: {
+//                     $expr: { $eq: ['$countInDrive', '$groupTotal'] },
+//                     lastUploadTime: { $lte: fiveMinutesAgo }
+//                 }
+//             }
+//         ]);
+
+//         if (archivableGroups.length === 0) {
+//             console.log('ARCHIVAL JANITOR: No complete groups are old enough to archive.');
+//             return;
+//         }
+
+//         console.log(`ARCHIVAL JANITOR: Found ${archivableGroups.length} group(s) to process.`);
+//         for (const group of archivableGroups) {
+//             // Use the robust, imported transfer function
+//             await transferGroupToTelegram(group._id);
+//         }
+
+//     } catch (error) {
+//         console.error('ARCHIVAL JANITOR: Error during group identification:', error);
+//     }
+//     console.log('ARCHIVAL JANITOR: Job finished.');
+// }
+
+
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 const express = require('express');
@@ -456,7 +555,6 @@ const userRoutes = require('./routes/user.routes');
 const fileRoutes = require('./routes/file.routes');
 const errorMiddleware = require('./middleware/error.middleware');
 const File = require('./models/File');
-// Import the robust transfer function from the controller
 const { transferGroupToTelegram } = require('./controllers/file.controller');
 
 connectDB();
@@ -466,7 +564,7 @@ const app = express();
 const whitelist = [
     'http://localhost:3000',
     process.env.FRONTEND_URL,
-].filter(Boolean); // Filter out undefined/null values
+].filter(Boolean);
 
 const corsOptions = {
     origin: function (origin, callback) {
@@ -481,11 +579,16 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-app.use(express.json());
 
-app.use('/api/auth', authRoutes);
-app.use('/api/users', userRoutes);
+// --- IMPORTANT: Middleware Configuration for Streaming ---
+// We apply the JSON body parser ONLY to the routes that expect JSON data.
+// This leaves the file upload route free to handle raw data streams.
+app.use('/api/auth', express.json(), authRoutes);
+app.use('/api/users', express.json(), userRoutes);
+
+// The /api/files route does NOT use express.json(), allowing for direct stream handling.
 app.use('/api/files', fileRoutes);
+// --- End Middleware Configuration ---
 
 app.use(errorMiddleware);
 
@@ -530,7 +633,6 @@ async function runArchivalProcess() {
 
         console.log(`ARCHIVAL JANITOR: Found ${archivableGroups.length} group(s) to process.`);
         for (const group of archivableGroups) {
-            // Use the robust, imported transfer function
             await transferGroupToTelegram(group._id);
         }
 

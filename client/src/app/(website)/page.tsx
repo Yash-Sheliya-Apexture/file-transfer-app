@@ -742,7 +742,7 @@
 //   );
 // }
 
-
+// client/src/app/(website)/layout.tsx
 "use client";
 
 import { useState, useMemo } from 'react'; // Import useMemo
