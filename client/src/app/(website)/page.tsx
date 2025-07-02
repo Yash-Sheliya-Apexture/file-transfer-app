@@ -580,7 +580,7 @@
 
 
 
-// client/src/app/(website)/layout.tsx
+// client/src/app/(website)/page.tsx
 "use client";
 
 import { useState } from 'react';
