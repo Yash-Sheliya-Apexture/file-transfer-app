@@ -578,191 +578,24 @@
 //   );
 // }
 
-// "use client";
-
-// import { useState } from 'react';
-// import { useDropzone } from 'react-dropzone';
-// import api from '@/services/api';
-// import { Progress } from "@/components/ui/progress";
-// import { Button } from "@/components/ui/button";
-// import { toast } from "sonner";
-// import { formatBytes } from '@/utils/format';
-// import { UploadCloud, File as FileIcon, X, CheckCircle, AlertCircle, Copy } from 'lucide-react';
-// import { Card, CardContent } from '@/components/ui/card';
-// import { v4 as uuidv4 } from 'uuid';
-
-// type UploadableFile = {
-//   file: File;
-//   status: 'pending' | 'uploading' | 'success' | 'error';
-//   progress: number;
-//   error?: string;
-// }
-
-// export default function HomePage() {
-//   const [files, setFiles] = useState<UploadableFile[]>([]);
-//   const [isUploading, setIsUploading] = useState(false);
-//   const [finalLink, setFinalLink] = useState<string | null>(null);
-
-//   const onDrop = (acceptedFiles: File[]) => {
-//     const newUploadableFiles = acceptedFiles.map(file => ({
-//       file,
-//       // FIX: Use 'as const' on the value, not the type. ESLint prefers this.
-//       status: 'pending' as const, 
-//       progress: 0,
-//     }));
-//     setFiles(prevFiles => [...prevFiles, ...newUploadableFiles]);
-//     setFinalLink(null);
-//   };
-
-//   const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop });
-
-//   const removeFile = (fileName: string) => {
-//     setFiles(prevFiles => prevFiles.filter(f => f.file.name !== fileName));
-//   }
-
-//   const handleUpload = async () => {
-//     const pendingFiles = files.filter(f => f.status === 'pending');
-//     if (pendingFiles.length === 0) return;
-
-//     setIsUploading(true);
-//     setFinalLink(null);
-//     const groupId = uuidv4().split('-')[0];
-//     const groupTotal = files.length;
-
-//     for (const uploadableFile of files) {
-//       if (uploadableFile.status !== 'pending') continue;
-
-//       try {
-//         setFiles(prev => prev.map(f => f.file.name === uploadableFile.file.name ? { ...f, status: 'uploading' } : f));
-
-//         const headers = {
-//           'Content-Type': uploadableFile.file.type,
-//           'X-File-Name': encodeURIComponent(uploadableFile.file.name),
-//           'X-Group-Id': groupId,
-//           'X-Group-Total': groupTotal.toString(),
-//         };
-
-//         await api.post('/files/upload', uploadableFile.file, {
-//           headers,
-//           onUploadProgress: (progressEvent) => {
-//             const { loaded, total } = progressEvent;
-//             if (total) {
-//               const percentCompleted = Math.round((loaded * 100) / total);
-//               setFiles(prev => prev.map(f =>
-//                 f.file.name === uploadableFile.file.name ? { ...f, progress: percentCompleted } : f
-//               ));
-//             }
-//           },
-//         });
-
-//         setFiles(prev => prev.map(f =>
-//           f.file.name === uploadableFile.file.name ? { ...f, status: 'success' } : f
-//         ));
-//       } catch (err) { // FIX: Type the error object properly
-//         const error = err as { response?: { data?: { message?: string } } };
-//         const errorMessage = error.response?.data?.message || 'Upload failed.';
-//         setFiles(prev => prev.map(f =>
-//           f.file.name === uploadableFile.file.name
-//           ? { ...f, status: 'error', error: errorMessage }
-//           : f
-//         ));
-//         toast.error(`Failed to upload ${uploadableFile.file.name}: ${errorMessage}`);
-//       }
-//     }
-
-//     setIsUploading(false);
-//     const fullUrl = `${window.location.origin}/download/${groupId}`;
-//     setFinalLink(fullUrl);
-//     toast.success("Upload complete!", {
-//       description: "Your shareable link is ready.",
-//     });
-//   };
-
-//   const copyLink = (link: string) => {
-//     navigator.clipboard.writeText(link);
-//     toast.success("Link copied to clipboard!");
-//   }
-  
-//   const allDone = files.length > 0 && files.every(f => f.status === 'success' || f.status === 'error');
-
-//   return (
-//     // ... JSX remains the same ...
-//     <main className="flex min-h-screen flex-col items-center justify-center p-4 sm:p-12 md:p-24 bg-gray-50">
-//       <Card className="w-full max-w-lg p-6 sm:p-8">
-//         <CardContent className="p-0">
-//           <h1 className="text-2xl font-bold text-center mb-4">File Transfer</h1>
-//           <div
-//             {...getRootProps()}
-//             className={`flex flex-col items-center justify-center p-10 border-2 border-dashed rounded-lg text-center cursor-pointer transition-colors ${isDragActive ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-gray-400'}`}
-//           >
-//             <input {...getInputProps()} />
-//             <UploadCloud className="h-12 w-12 text-gray-400 mb-2" />
-//             <p className="font-semibold">Drag & drop files here, or click to select</p>
-//             <p className="text-sm text-gray-500">Upload multiple files to create a single share link</p>
-//           </div>
-
-//           {files.length > 0 && (
-//             <div className="mt-6 space-y-3">
-//               <h2 className="font-semibold">Files to Upload</h2>
-//               {files.map((uploadableFile, index) => (
-//                 <div key={index} className="border rounded-md p-3 flex items-center space-x-3">
-//                   <FileIcon className="h-6 w-6 text-gray-500 flex-shrink-0" />
-//                   <div className="flex-grow overflow-hidden">
-//                     <p className="text-sm font-medium truncate" title={uploadableFile.file.name}>
-//                       {uploadableFile.file.name}
-//                     </p>
-//                     <p className="text-xs text-gray-500">{formatBytes(uploadableFile.file.size)}</p>
-//                     {uploadableFile.status === 'uploading' && <Progress value={uploadableFile.progress} className="h-1.5 mt-1" />}
-//                     {uploadableFile.status === 'success' && <p className="text-xs text-green-600 flex items-center gap-1 mt-1"><CheckCircle size={14} /> Uploaded!</p>}
-//                     {uploadableFile.status === 'error' && <p className="text-xs text-red-600 flex items-center gap-1 mt-1"><AlertCircle size={14} /> {uploadableFile.error}</p>}
-//                   </div>
-//                   <Button variant="ghost" size="icon" onClick={() => removeFile(uploadableFile.file.name)} disabled={isUploading || allDone}>
-//                     <X className="h-4 w-4" />
-//                   </Button>
-//                 </div>
-//               ))}
-//             </div>
-//           )}
-
-//           {finalLink ? (
-//             <div className="mt-6">
-//                 <div className="flex items-center space-x-2">
-//                     <input value={finalLink} readOnly className="flex-1 p-2 border rounded-md"/>
-//                     <Button onClick={() => copyLink(finalLink)}><Copy className="h-4 w-4 mr-2"/>Copy</Button>
-//                 </div>
-//             </div>
-//           ) : files.length > 0 && (
-//             <Button onClick={handleUpload} className="w-full mt-6" disabled={isUploading || allDone}>
-//               {isUploading ? 'Uploading...' : `Upload ${files.filter(f => f.status === 'pending').length} File(s)`}
-//             </Button>
-//           )}
-//         </CardContent>
-//       </Card>
-//     </main>
-//   );
-// }
-
-// client/src/app/(website)/layout.tsx
 "use client";
 
-import { useState, useMemo } from 'react'; // Import useMemo
+import { useState } from 'react';
 import { useDropzone } from 'react-dropzone';
 import api from '@/services/api';
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { formatBytes } from '@/utils/format';
-import { UploadCloud, File as FileIcon, X, CheckCircle, AlertCircle, Copy, Loader2 } from 'lucide-react';
+import { UploadCloud, File as FileIcon, X, CheckCircle, AlertCircle, Copy } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { v4 as uuidv4 } from 'uuid';
 
 type UploadableFile = {
-  id: string; // Add a unique ID for better state management
   file: File;
   status: 'pending' | 'uploading' | 'success' | 'error';
   progress: number;
   error?: string;
-  uploadedBytes: number; // Track uploaded bytes per file
 }
 
 export default function HomePage() {
@@ -771,12 +604,11 @@ export default function HomePage() {
   const [finalLink, setFinalLink] = useState<string | null>(null);
 
   const onDrop = (acceptedFiles: File[]) => {
-    const newUploadableFiles: UploadableFile[] = acceptedFiles.map(file => ({
-      id: uuidv4(),
+    const newUploadableFiles = acceptedFiles.map(file => ({
       file,
-      status: 'pending' as const,
+      // FIX: Use 'as const' on the value, not the type. ESLint prefers this.
+      status: 'pending' as const, 
       progress: 0,
-      uploadedBytes: 0,
     }));
     setFiles(prevFiles => [...prevFiles, ...newUploadableFiles]);
     setFinalLink(null);
@@ -784,22 +616,9 @@ export default function HomePage() {
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop });
 
-  const removeFile = (id: string) => {
-    setFiles(prevFiles => prevFiles.filter(f => f.id !== id));
+  const removeFile = (fileName: string) => {
+    setFiles(prevFiles => prevFiles.filter(f => f.file.name !== fileName));
   }
-
-  // --- NEW: Memoized calculations for total progress ---
-  const { totalSize, totalUploaded, overallProgress } = useMemo(() => {
-    const size = files.reduce((acc, curr) => acc + curr.file.size, 0);
-    const uploaded = files.reduce((acc, curr) => acc + curr.uploadedBytes, 0);
-    const progress = size > 0 ? Math.round((uploaded * 100) / size) : 0;
-    return {
-      totalSize: size,
-      totalUploaded: uploaded,
-      overallProgress: progress,
-    };
-  }, [files]);
-  // --- END NEW ---
 
   const handleUpload = async () => {
     const pendingFiles = files.filter(f => f.status === 'pending');
@@ -810,65 +629,53 @@ export default function HomePage() {
     const groupId = uuidv4().split('-')[0];
     const groupTotal = files.length;
 
-    // Use Promise.all to upload files concurrently for better performance
-    const uploadPromises = files.map(uploadableFile => (
-        (async () => {
-            if (uploadableFile.status !== 'pending') return;
+    for (const uploadableFile of files) {
+      if (uploadableFile.status !== 'pending') continue;
 
-            try {
-                setFiles(prev => prev.map(f => f.id === uploadableFile.id ? { ...f, status: 'uploading' } : f));
+      try {
+        setFiles(prev => prev.map(f => f.file.name === uploadableFile.file.name ? { ...f, status: 'uploading' } : f));
 
-                const headers = {
-                    'Content-Type': uploadableFile.file.type,
-                    'X-File-Name': encodeURIComponent(uploadableFile.file.name),
-                    'X-Group-Id': groupId,
-                    'X-Group-Total': groupTotal.toString(),
-                };
+        const headers = {
+          'Content-Type': uploadableFile.file.type,
+          'X-File-Name': encodeURIComponent(uploadableFile.file.name),
+          'X-Group-Id': groupId,
+          'X-Group-Total': groupTotal.toString(),
+        };
 
-                await api.post('/files/upload', uploadableFile.file, {
-                    headers,
-                    onUploadProgress: (progressEvent) => {
-                        const { loaded, total } = progressEvent;
-                        if (total) {
-                            const percentCompleted = Math.round((loaded * 100) / total);
-                            setFiles(prev => prev.map(f =>
-                                f.id === uploadableFile.id ? { ...f, progress: percentCompleted, uploadedBytes: loaded } : f
-                            ));
-                        }
-                    },
-                });
-
-                setFiles(prev => prev.map(f =>
-                    f.id === uploadableFile.id ? { ...f, status: 'success', progress: 100 } : f
-                ));
-            } catch (err) {
-                const error = err as { response?: { data?: { message?: string } } };
-                const errorMessage = error.response?.data?.message || 'Upload failed.';
-                setFiles(prev => prev.map(f =>
-                    f.id === uploadableFile.id
-                    ? { ...f, status: 'error', error: errorMessage }
-                    : f
-                ));
-                toast.error(`Failed to upload ${uploadableFile.file.name}: ${errorMessage}`);
+        await api.post('/files/upload', uploadableFile.file, {
+          headers,
+          onUploadProgress: (progressEvent) => {
+            const { loaded, total } = progressEvent;
+            if (total) {
+              const percentCompleted = Math.round((loaded * 100) / total);
+              setFiles(prev => prev.map(f =>
+                f.file.name === uploadableFile.file.name ? { ...f, progress: percentCompleted } : f
+              ));
             }
-        })()
-    ));
+          },
+        });
 
-    await Promise.all(uploadPromises);
+        setFiles(prev => prev.map(f =>
+          f.file.name === uploadableFile.file.name ? { ...f, status: 'success' } : f
+        ));
+      } catch (err) { // FIX: Type the error object properly
+        const error = err as { response?: { data?: { message?: string } } };
+        const errorMessage = error.response?.data?.message || 'Upload failed.';
+        setFiles(prev => prev.map(f =>
+          f.file.name === uploadableFile.file.name
+          ? { ...f, status: 'error', error: errorMessage }
+          : f
+        ));
+        toast.error(`Failed to upload ${uploadableFile.file.name}: ${errorMessage}`);
+      }
+    }
 
     setIsUploading(false);
-    
-    // Check if all uploads were successful before showing the final link
-    const allSucceeded = files.every(f => f.status === 'success');
-    if (allSucceeded) {
-      const fullUrl = `${window.location.origin}/download/${groupId}`;
-      setFinalLink(fullUrl);
-      toast.success("Upload complete!", {
-        description: "Your shareable link is ready.",
-      });
-    } else {
-      toast.error("Some files failed to upload. Please try again.");
-    }
+    const fullUrl = `${window.location.origin}/download/${groupId}`;
+    setFinalLink(fullUrl);
+    toast.success("Upload complete!", {
+      description: "Your shareable link is ready.",
+    });
   };
 
   const copyLink = (link: string) => {
@@ -879,7 +686,8 @@ export default function HomePage() {
   const allDone = files.length > 0 && files.every(f => f.status === 'success' || f.status === 'error');
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center p-4 sm:p-12 md:p-24 bg-gray-50 dark:bg-gray-950">
+    // ... JSX remains the same ...
+    <main className="flex min-h-screen flex-col items-center justify-center p-4 sm:p-12 md:p-24 bg-gray-50">
       <Card className="w-full max-w-lg p-6 sm:p-8">
         <CardContent className="p-0">
           <h1 className="text-2xl font-bold text-center mb-4">File Transfer</h1>
@@ -896,23 +704,8 @@ export default function HomePage() {
           {files.length > 0 && (
             <div className="mt-6 space-y-3">
               <h2 className="font-semibold">Files to Upload</h2>
-              {/* --- NEW: Overall Progress Bar --- */}
-              {isUploading && (
-                <div className="space-y-1 my-4">
-                  <div className="flex justify-between text-sm font-medium text-gray-600 dark:text-gray-300">
-                    <span>Overall Progress</span>
-                    <span>{overallProgress}%</span>
-                  </div>
-                  <Progress value={overallProgress} className="h-2" />
-                  <p className="text-xs text-right text-gray-500 dark:text-gray-400">
-                    {formatBytes(totalUploaded)} / {formatBytes(totalSize)}
-                  </p>
-                </div>
-              )}
-              {/* --- END NEW --- */}
-
-              {files.map((uploadableFile) => (
-                <div key={uploadableFile.id} className="border rounded-md p-3 flex items-center space-x-3">
+              {files.map((uploadableFile, index) => (
+                <div key={index} className="border rounded-md p-3 flex items-center space-x-3">
                   <FileIcon className="h-6 w-6 text-gray-500 flex-shrink-0" />
                   <div className="flex-grow overflow-hidden">
                     <p className="text-sm font-medium truncate" title={uploadableFile.file.name}>
@@ -923,7 +716,7 @@ export default function HomePage() {
                     {uploadableFile.status === 'success' && <p className="text-xs text-green-600 flex items-center gap-1 mt-1"><CheckCircle size={14} /> Uploaded!</p>}
                     {uploadableFile.status === 'error' && <p className="text-xs text-red-600 flex items-center gap-1 mt-1"><AlertCircle size={14} /> {uploadableFile.error}</p>}
                   </div>
-                  <Button variant="ghost" size="icon" onClick={() => removeFile(uploadableFile.id)} disabled={isUploading || allDone}>
+                  <Button variant="ghost" size="icon" onClick={() => removeFile(uploadableFile.file.name)} disabled={isUploading || allDone}>
                     <X className="h-4 w-4" />
                   </Button>
                 </div>
@@ -940,12 +733,7 @@ export default function HomePage() {
             </div>
           ) : files.length > 0 && (
             <Button onClick={handleUpload} className="w-full mt-6" disabled={isUploading || allDone}>
-              {isUploading ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Uploading...
-                </>
-              ) : `Upload ${files.filter(f => f.status === 'pending').length} File(s)`}
+              {isUploading ? 'Uploading...' : `Upload ${files.filter(f => f.status === 'pending').length} File(s)`}
             </Button>
           )}
         </CardContent>
@@ -953,3 +741,215 @@ export default function HomePage() {
     </main>
   );
 }
+
+// // client/src/app/(website)/layout.tsx
+// "use client";
+
+// import { useState, useMemo } from 'react'; // Import useMemo
+// import { useDropzone } from 'react-dropzone';
+// import api from '@/services/api';
+// import { Progress } from "@/components/ui/progress";
+// import { Button } from "@/components/ui/button";
+// import { toast } from "sonner";
+// import { formatBytes } from '@/utils/format';
+// import { UploadCloud, File as FileIcon, X, CheckCircle, AlertCircle, Copy, Loader2 } from 'lucide-react';
+// import { Card, CardContent } from '@/components/ui/card';
+// import { v4 as uuidv4 } from 'uuid';
+
+// type UploadableFile = {
+//   id: string; // Add a unique ID for better state management
+//   file: File;
+//   status: 'pending' | 'uploading' | 'success' | 'error';
+//   progress: number;
+//   error?: string;
+//   uploadedBytes: number; // Track uploaded bytes per file
+// }
+
+// export default function HomePage() {
+//   const [files, setFiles] = useState<UploadableFile[]>([]);
+//   const [isUploading, setIsUploading] = useState(false);
+//   const [finalLink, setFinalLink] = useState<string | null>(null);
+
+//   const onDrop = (acceptedFiles: File[]) => {
+//     const newUploadableFiles: UploadableFile[] = acceptedFiles.map(file => ({
+//       id: uuidv4(),
+//       file,
+//       status: 'pending' as const,
+//       progress: 0,
+//       uploadedBytes: 0,
+//     }));
+//     setFiles(prevFiles => [...prevFiles, ...newUploadableFiles]);
+//     setFinalLink(null);
+//   };
+
+//   const { getRootProps, getInputProps, isDragActive } = useDropzone({ onDrop });
+
+//   const removeFile = (id: string) => {
+//     setFiles(prevFiles => prevFiles.filter(f => f.id !== id));
+//   }
+
+//   // --- NEW: Memoized calculations for total progress ---
+//   const { totalSize, totalUploaded, overallProgress } = useMemo(() => {
+//     const size = files.reduce((acc, curr) => acc + curr.file.size, 0);
+//     const uploaded = files.reduce((acc, curr) => acc + curr.uploadedBytes, 0);
+//     const progress = size > 0 ? Math.round((uploaded * 100) / size) : 0;
+//     return {
+//       totalSize: size,
+//       totalUploaded: uploaded,
+//       overallProgress: progress,
+//     };
+//   }, [files]);
+//   // --- END NEW ---
+
+//   const handleUpload = async () => {
+//     const pendingFiles = files.filter(f => f.status === 'pending');
+//     if (pendingFiles.length === 0) return;
+
+//     setIsUploading(true);
+//     setFinalLink(null);
+//     const groupId = uuidv4().split('-')[0];
+//     const groupTotal = files.length;
+
+//     // Use Promise.all to upload files concurrently for better performance
+//     const uploadPromises = files.map(uploadableFile => (
+//         (async () => {
+//             if (uploadableFile.status !== 'pending') return;
+
+//             try {
+//                 setFiles(prev => prev.map(f => f.id === uploadableFile.id ? { ...f, status: 'uploading' } : f));
+
+//                 const headers = {
+//                     'Content-Type': uploadableFile.file.type,
+//                     'X-File-Name': encodeURIComponent(uploadableFile.file.name),
+//                     'X-Group-Id': groupId,
+//                     'X-Group-Total': groupTotal.toString(),
+//                 };
+
+//                 await api.post('/files/upload', uploadableFile.file, {
+//                     headers,
+//                     onUploadProgress: (progressEvent) => {
+//                         const { loaded, total } = progressEvent;
+//                         if (total) {
+//                             const percentCompleted = Math.round((loaded * 100) / total);
+//                             setFiles(prev => prev.map(f =>
+//                                 f.id === uploadableFile.id ? { ...f, progress: percentCompleted, uploadedBytes: loaded } : f
+//                             ));
+//                         }
+//                     },
+//                 });
+
+//                 setFiles(prev => prev.map(f =>
+//                     f.id === uploadableFile.id ? { ...f, status: 'success', progress: 100 } : f
+//                 ));
+//             } catch (err) {
+//                 const error = err as { response?: { data?: { message?: string } } };
+//                 const errorMessage = error.response?.data?.message || 'Upload failed.';
+//                 setFiles(prev => prev.map(f =>
+//                     f.id === uploadableFile.id
+//                     ? { ...f, status: 'error', error: errorMessage }
+//                     : f
+//                 ));
+//                 toast.error(`Failed to upload ${uploadableFile.file.name}: ${errorMessage}`);
+//             }
+//         })()
+//     ));
+
+//     await Promise.all(uploadPromises);
+
+//     setIsUploading(false);
+    
+//     // Check if all uploads were successful before showing the final link
+//     const allSucceeded = files.every(f => f.status === 'success');
+//     if (allSucceeded) {
+//       const fullUrl = `${window.location.origin}/download/${groupId}`;
+//       setFinalLink(fullUrl);
+//       toast.success("Upload complete!", {
+//         description: "Your shareable link is ready.",
+//       });
+//     } else {
+//       toast.error("Some files failed to upload. Please try again.");
+//     }
+//   };
+
+//   const copyLink = (link: string) => {
+//     navigator.clipboard.writeText(link);
+//     toast.success("Link copied to clipboard!");
+//   }
+  
+//   const allDone = files.length > 0 && files.every(f => f.status === 'success' || f.status === 'error');
+
+//   return (
+//     <main className="flex min-h-screen flex-col items-center justify-center p-4 sm:p-12 md:p-24 bg-gray-50 dark:bg-gray-950">
+//       <Card className="w-full max-w-lg p-6 sm:p-8">
+//         <CardContent className="p-0">
+//           <h1 className="text-2xl font-bold text-center mb-4">File Transfer</h1>
+//           <div
+//             {...getRootProps()}
+//             className={`flex flex-col items-center justify-center p-10 border-2 border-dashed rounded-lg text-center cursor-pointer transition-colors ${isDragActive ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-gray-400'}`}
+//           >
+//             <input {...getInputProps()} />
+//             <UploadCloud className="h-12 w-12 text-gray-400 mb-2" />
+//             <p className="font-semibold">Drag & drop files here, or click to select</p>
+//             <p className="text-sm text-gray-500">Upload multiple files to create a single share link</p>
+//           </div>
+
+//           {files.length > 0 && (
+//             <div className="mt-6 space-y-3">
+//               <h2 className="font-semibold">Files to Upload</h2>
+//               {/* --- NEW: Overall Progress Bar --- */}
+//               {isUploading && (
+//                 <div className="space-y-1 my-4">
+//                   <div className="flex justify-between text-sm font-medium text-gray-600 dark:text-gray-300">
+//                     <span>Overall Progress</span>
+//                     <span>{overallProgress}%</span>
+//                   </div>
+//                   <Progress value={overallProgress} className="h-2" />
+//                   <p className="text-xs text-right text-gray-500 dark:text-gray-400">
+//                     {formatBytes(totalUploaded)} / {formatBytes(totalSize)}
+//                   </p>
+//                 </div>
+//               )}
+//               {/* --- END NEW --- */}
+
+//               {files.map((uploadableFile) => (
+//                 <div key={uploadableFile.id} className="border rounded-md p-3 flex items-center space-x-3">
+//                   <FileIcon className="h-6 w-6 text-gray-500 flex-shrink-0" />
+//                   <div className="flex-grow overflow-hidden">
+//                     <p className="text-sm font-medium truncate" title={uploadableFile.file.name}>
+//                       {uploadableFile.file.name}
+//                     </p>
+//                     <p className="text-xs text-gray-500">{formatBytes(uploadableFile.file.size)}</p>
+//                     {uploadableFile.status === 'uploading' && <Progress value={uploadableFile.progress} className="h-1.5 mt-1" />}
+//                     {uploadableFile.status === 'success' && <p className="text-xs text-green-600 flex items-center gap-1 mt-1"><CheckCircle size={14} /> Uploaded!</p>}
+//                     {uploadableFile.status === 'error' && <p className="text-xs text-red-600 flex items-center gap-1 mt-1"><AlertCircle size={14} /> {uploadableFile.error}</p>}
+//                   </div>
+//                   <Button variant="ghost" size="icon" onClick={() => removeFile(uploadableFile.id)} disabled={isUploading || allDone}>
+//                     <X className="h-4 w-4" />
+//                   </Button>
+//                 </div>
+//               ))}
+//             </div>
+//           )}
+
+//           {finalLink ? (
+//             <div className="mt-6">
+//                 <div className="flex items-center space-x-2">
+//                     <input value={finalLink} readOnly className="flex-1 p-2 border rounded-md"/>
+//                     <Button onClick={() => copyLink(finalLink)}><Copy className="h-4 w-4 mr-2"/>Copy</Button>
+//                 </div>
+//             </div>
+//           ) : files.length > 0 && (
+//             <Button onClick={handleUpload} className="w-full mt-6" disabled={isUploading || allDone}>
+//               {isUploading ? (
+//                 <>
+//                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+//                   Uploading...
+//                 </>
+//               ) : `Upload ${files.filter(f => f.status === 'pending').length} File(s)`}
+//             </Button>
+//           )}
+//         </CardContent>
+//       </Card>
+//     </main>
+//   );
+// }
