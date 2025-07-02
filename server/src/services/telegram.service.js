@@ -399,8 +399,9 @@ const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const API_URL = `https://api.telegram.org/bot${TOKEN}`;
 
-// A very generous default timeout for all network requests in this service
-const AXIOS_TIMEOUT = 120 * 60 * 1000; // 2 hours
+// --- FIX: Define a very generous default timeout for all network requests ---
+// Set a 2-hour timeout (in milliseconds) to prevent failures on large file transfers.
+const AXIOS_TIMEOUT = 120 * 60 * 1000; 
 
 exports.uploadChunk = async (chunkBuffer, fileName) => {
     const form = new FormData();
@@ -412,7 +413,7 @@ exports.uploadChunk = async (chunkBuffer, fileName) => {
             headers: { ...form.getHeaders() },
             maxContentLength: Infinity,
             maxBodyLength: Infinity,
-            timeout: AXIOS_TIMEOUT,
+            timeout: AXIOS_TIMEOUT, // <-- FIX: Apply the long timeout here
         });
         if (response.data.ok) return response.data.result.message_id;
         throw new Error(`Telegram API error: ${response.data.description}`);
@@ -427,7 +428,7 @@ exports.getFileStream = async (messageId) => {
     try {
         const forwardResponse = await axios.post(`${API_URL}/forwardMessage`, {
             chat_id: CHAT_ID, from_chat_id: CHAT_ID, message_id: messageId
-        }, { timeout: AXIOS_TIMEOUT });
+        }, { timeout: AXIOS_TIMEOUT }); // <-- FIX: Apply the long timeout here
 
         if (!forwardResponse.data.ok || !forwardResponse.data.result.document) {
             throw new Error('Failed to get file metadata by forwarding message.');
@@ -436,7 +437,7 @@ exports.getFileStream = async (messageId) => {
         const fileId = forwardResponse.data.result.document.file_id;
         const forwardedMessageId = forwardResponse.data.result.message_id;
 
-        const getFileResponse = await axios.post(`${API_URL}/getFile`, { file_id: fileId }, { timeout: AXIOS_TIMEOUT });
+        const getFileResponse = await axios.post(`${API_URL}/getFile`, { file_id: fileId }, { timeout: AXIOS_TIMEOUT }); // <-- FIX: Apply the long timeout here
         
         // Clean up the forwarded message in the background
         axios.post(`${API_URL}/deleteMessage`, { chat_id: CHAT_ID, message_id: forwardedMessageId })
@@ -450,7 +451,7 @@ exports.getFileStream = async (messageId) => {
         const fileUrl = `https://api.telegram.org/file/bot${TOKEN}/${filePath}`;
 
         const streamResponse = await axios({
-            url: fileUrl, method: 'GET', responseType: 'stream', timeout: AXIOS_TIMEOUT
+            url: fileUrl, method: 'GET', responseType: 'stream', timeout: AXIOS_TIMEOUT // <-- FIX: Apply the long timeout here
         });
 
         return streamResponse.data;

@@ -118,6 +118,8 @@
 //   );
 // }
 
+
+// client/src/app/auth/register/page.tsx
 "use client";
 
 // ... (imports remain the same)
