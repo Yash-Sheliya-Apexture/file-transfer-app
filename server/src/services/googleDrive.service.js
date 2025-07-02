@@ -477,49 +477,133 @@
 // };
 
 
+// // server/src/services/googleDrive.service.js
+// const { google } = require('googleapis');
+// const fs = require('fs');
+// const path = require('path');
+
+// const SCOPES = ['https://www.googleapis.com/auth/drive'];
+// const GDRIVE_FOLDER_ID = process.env.GDRIVE_FOLDER_ID;
+// const GDriveOwnerEmail = process.env.GDRIVE_OWNER_EMAIL;
+
+// function loadCredentials() {
+//     if (process.env.NODE_ENV === 'production' && process.env.GOOGLE_SERVICE_ACCOUNT_KEY_JSON) {
+//         try {
+//             console.log("Loading credentials from GOOGLE_SERVICE_ACCOUNT_KEY_JSON environment variable.");
+//             return JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY_JSON);
+//         } catch (error) {
+//             console.error("FATAL: Could not parse GOOGLE_SERVICE_ACCOUNT_KEY_JSON.", error);
+//             throw new Error("Invalid GOOGLE_SERVICE_ACCOUNT_KEY_JSON environment variable.");
+//         }
+//     } else if (process.env.GOOGLE_CREDENTIALS_PATH) {
+//         try {
+//             const keyFilePath = path.resolve(process.cwd(), process.env.GOOGLE_CREDENTIALS_PATH);
+//             console.log(`Loading credentials from resolved file path: ${keyFilePath}`);
+//             const keyFileContent = fs.readFileSync(keyFilePath, 'utf8');
+//             return JSON.parse(keyFileContent);
+//         } catch (error) {
+//             console.error(`FATAL: Could not read or parse credentials file at ${process.env.GOOGLE_CREDENTIALS_PATH}.`, error);
+//             throw new Error("Invalid GOOGLE_CREDENTIALS_PATH or file content.");
+//         }
+//     } else {
+//         throw new Error("FATAL: Google credentials not configured. Set either GOOGLE_SERVICE_ACCOUNT_KEY_JSON or GOOGLE_CREDENTIALS_PATH.");
+//     }
+// }
+
+// const credentials = loadCredentials();
+
+// const auth = new google.auth.GoogleAuth({
+//   credentials,
+//   scopes: SCOPES,
+// });
+
+// const drive = google.drive({ version: 'v3', auth });
+
+// exports.createFile = async (fileName, mimeType, fileStream) => {
+//   const response = await drive.files.create({
+//     requestBody: { name: fileName, parents: [GDRIVE_FOLDER_ID] },
+//     media: { mimeType: mimeType, body: fileStream },
+//     supportsAllDrives: true,
+//   });
+//   return response.data;
+// };
+
+// exports.transferOwnership = async (fileId) => {
+//     if (!GDriveOwnerEmail) {
+//         console.warn("GDRIVE_OWNER_EMAIL not set. Cannot transfer ownership. File will remain on service account quota.");
+//         return;
+//     }
+//     try {
+//         await drive.permissions.create({
+//             fileId: fileId,
+//             transferOwnership: true,
+//             requestBody: {
+//                 role: 'owner',
+//                 type: 'user',
+//                 emailAddress: GDriveOwnerEmail,
+//             },
+//             supportsAllDrives: true,
+//         });
+//         console.log(`Successfully transferred ownership of ${fileId} to ${GDriveOwnerEmail}`);
+//     } catch(error) {
+//         console.error(`Failed to transfer ownership for file ${fileId}:`, error.message);
+//     }
+// };
+
+// exports.getFileStream = async (fileId) => {
+//   const response = await drive.files.get(
+//     { fileId, alt: 'media', supportsAllDrives: true },
+//     { responseType: 'stream', timeout: 120 * 60 * 1000 }
+//   );
+//   return response.data;
+// };
+
+// exports.deleteFile = async (fileId) => {
+//   await drive.files.delete({ fileId, supportsAllDrives: true });
+// };
+
+// exports.listAllFiles = async () => {
+//     const response = await drive.files.list({
+//         q: `'${GDRIVE_FOLDER_ID}' in parents and trashed = false`,
+//         fields: 'files(id, name)',
+//         supportsAllDrives: true,
+//         includeItemsFromAllDrives: true,
+//     });
+//     return response.data.files || [];
+// };
+
 // server/src/services/googleDrive.service.js
 const { google } = require('googleapis');
-const fs = require('fs');
-const path = require('path');
 
-const SCOPES = ['https://www.googleapis.com/auth/drive'];
+// --- NEW OAUTH 2.0 CONFIGURATION ---
 const GDRIVE_FOLDER_ID = process.env.GDRIVE_FOLDER_ID;
-const GDriveOwnerEmail = process.env.GDRIVE_OWNER_EMAIL;
+const GDRIVE_CLIENT_ID = process.env.GDRIVE_CLIENT_ID;
+const GDRIVE_CLIENT_SECRET = process.env.GDRIVE_CLIENT_SECRET;
+const GDRIVE_REDIRECT_URI = process.env.GDRIVE_REDIRECT_URI;
+const GDRIVE_REFRESH_TOKEN = process.env.GDRIVE_REFRESH_TOKEN;
 
-function loadCredentials() {
-    if (process.env.NODE_ENV === 'production' && process.env.GOOGLE_SERVICE_ACCOUNT_KEY_JSON) {
-        try {
-            console.log("Loading credentials from GOOGLE_SERVICE_ACCOUNT_KEY_JSON environment variable.");
-            return JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_KEY_JSON);
-        } catch (error) {
-            console.error("FATAL: Could not parse GOOGLE_SERVICE_ACCOUNT_KEY_JSON.", error);
-            throw new Error("Invalid GOOGLE_SERVICE_ACCOUNT_KEY_JSON environment variable.");
-        }
-    } else if (process.env.GOOGLE_CREDENTIALS_PATH) {
-        try {
-            const keyFilePath = path.resolve(process.cwd(), process.env.GOOGLE_CREDENTIALS_PATH);
-            console.log(`Loading credentials from resolved file path: ${keyFilePath}`);
-            const keyFileContent = fs.readFileSync(keyFilePath, 'utf8');
-            return JSON.parse(keyFileContent);
-        } catch (error) {
-            console.error(`FATAL: Could not read or parse credentials file at ${process.env.GOOGLE_CREDENTIALS_PATH}.`, error);
-            throw new Error("Invalid GOOGLE_CREDENTIALS_PATH or file content.");
-        }
-    } else {
-        throw new Error("FATAL: Google credentials not configured. Set either GOOGLE_SERVICE_ACCOUNT_KEY_JSON or GOOGLE_CREDENTIALS_PATH.");
-    }
+// Validate that all required environment variables are set
+if (!GDRIVE_FOLDER_ID || !GDRIVE_CLIENT_ID || !GDRIVE_CLIENT_SECRET || !GDRIVE_REDIRECT_URI || !GDRIVE_REFRESH_TOKEN) {
+    throw new Error("FATAL: Google Drive OAuth 2.0 credentials are not fully configured. Please check your .env file.");
 }
 
-const credentials = loadCredentials();
+// Create an OAuth2 client
+const oAuth2Client = new google.auth.OAuth2(
+    GDRIVE_CLIENT_ID,
+    GDRIVE_CLIENT_SECRET,
+    GDRIVE_REDIRECT_URI
+);
 
-const auth = new google.auth.GoogleAuth({
-  credentials,
-  scopes: SCOPES,
-});
+// Set the refresh token, which allows us to get new access tokens automatically
+oAuth2Client.setCredentials({ refresh_token: GDRIVE_REFRESH_TOKEN });
 
-const drive = google.drive({ version: 'v3', auth });
+// Initialize the Drive API client with the authenticated OAuth2 client
+const drive = google.drive({ version: 'v3', auth: oAuth2Client });
+// --- END OF NEW CONFIGURATION ---
+
 
 exports.createFile = async (fileName, mimeType, fileStream) => {
+  // Now, when this runs, it acts on behalf of YOUR Google account.
   const response = await drive.files.create({
     requestBody: { name: fileName, parents: [GDRIVE_FOLDER_ID] },
     media: { mimeType: mimeType, body: fileStream },
@@ -528,26 +612,11 @@ exports.createFile = async (fileName, mimeType, fileStream) => {
   return response.data;
 };
 
+// This function is obsolete as files are created by the owner directly.
+// It is kept here to prevent crashes if called, but it does nothing.
 exports.transferOwnership = async (fileId) => {
-    if (!GDriveOwnerEmail) {
-        console.warn("GDRIVE_OWNER_EMAIL not set. Cannot transfer ownership. File will remain on service account quota.");
-        return;
-    }
-    try {
-        await drive.permissions.create({
-            fileId: fileId,
-            transferOwnership: true,
-            requestBody: {
-                role: 'owner',
-                type: 'user',
-                emailAddress: GDriveOwnerEmail,
-            },
-            supportsAllDrives: true,
-        });
-        console.log(`Successfully transferred ownership of ${fileId} to ${GDriveOwnerEmail}`);
-    } catch(error) {
-        console.error(`Failed to transfer ownership for file ${fileId}:`, error.message);
-    }
+    console.log(`OAuth2 Client used: Ownership of ${fileId} is already correct. No transfer needed.`);
+    return;
 };
 
 exports.getFileStream = async (fileId) => {
