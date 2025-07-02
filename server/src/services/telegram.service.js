@@ -390,77 +390,248 @@
 //     }
 // };
 
+// const axios = require('axios');
+// const FormData = require('form-data');
+
+// const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+// const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+// const API_URL = `https://api.telegram.org/bot${TOKEN}`;
+
+// // Set a very generous timeout (e.g., 2 hours) for all network requests
+// // to prevent failures on large file transfers.
+// const AXIOS_TIMEOUT = 120 * 60 * 1000;
+
+// exports.uploadChunk = async (chunkBuffer, fileName) => {
+//     const form = new FormData();
+//     form.append('chat_id', CHAT_ID);
+//     form.append('document', chunkBuffer, { filename: fileName, contentType: 'application/octet-stream' });
+    
+//     try {
+//         const response = await axios.post(`${API_URL}/sendDocument`, form, {
+//             headers: { ...form.getHeaders() },
+//             maxContentLength: Infinity,
+//             maxBodyLength: Infinity,
+//             // FIX: Ensure the long timeout is applied here
+//             timeout: AXIOS_TIMEOUT, 
+//         });
+
+//         if (response.data.ok) return response.data.result.message_id;
+//         throw new Error(`Telegram API error: ${response.data.description}`);
+
+//     } catch (error) {
+//         if (error.response) {
+//             console.error('Telegram Upload Error Response:', error.response.data);
+//         } else {
+//             console.error('Telegram Upload Error Message:', error.message);
+//         }
+//         // It's crucial to re-throw the error so the calling function knows the transfer failed
+//         throw error;
+//     }
+// };
+
+// exports.getFileStream = async (messageId) => {
+//     try {
+//         const forwardResponse = await axios.post(`${API_URL}/forwardMessage`, {
+//             chat_id: CHAT_ID, from_chat_id: CHAT_ID, message_id: messageId
+//         }, { timeout: AXIOS_TIMEOUT }); // <-- FIX: Apply the long timeout here
+
+//         if (!forwardResponse.data.ok || !forwardResponse.data.result.document) {
+//             throw new Error('Failed to get file metadata by forwarding message.');
+//         }
+
+//         const fileId = forwardResponse.data.result.document.file_id;
+//         const forwardedMessageId = forwardResponse.data.result.message_id;
+
+//         const getFileResponse = await axios.post(`${API_URL}/getFile`, { file_id: fileId }, { timeout: AXIOS_TIMEOUT }); // <-- FIX: Apply the long timeout here
+        
+//         // Clean up the forwarded message in the background
+//         axios.post(`${API_URL}/deleteMessage`, { chat_id: CHAT_ID, message_id: forwardedMessageId })
+//             .catch(err => console.error("Non-critical: Could not delete forwarded message:", err.response?.data));
+
+//         if (!getFileResponse.data.ok) {
+//             throw new Error('Could not get file path from Telegram.');
+//         }
+        
+//         const filePath = getFileResponse.data.result.file_path;
+//         const fileUrl = `https://api.telegram.org/file/bot${TOKEN}/${filePath}`;
+
+//         const streamResponse = await axios({
+//             url: fileUrl, method: 'GET', responseType: 'stream', timeout: AXIOS_TIMEOUT // <-- FIX: Apply the long timeout here
+//         });
+
+//         return streamResponse.data;
+//     } catch (error) {
+//         if (error.response) {
+//             console.error(`Telegram getFileStream API Error for messageId ${messageId}:`, error.response.data);
+//         } else {
+//             console.error(`Telegram getFileStream General Error for messageId ${messageId}:`, error.message);
+//         }
+//         throw error;
+//     }
+// };
+
+
+// const axios = require('axios');
+// const FormData = require('form-data');
+
+// const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+// const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+// const API_URL = `https://api.telegram.org/bot${TOKEN}`;
+
+// // Set a very generous timeout (e.g., 2 hours) for all network requests
+// // to prevent failures on large file transfers.
+// const AXIOS_TIMEOUT = 120 * 60 * 1000;
+
+// exports.uploadChunk = async (chunkBuffer, fileName) => {
+//     const form = new FormData();
+//     form.append('chat_id', CHAT_ID);
+//     form.append('document', chunkBuffer, { filename: fileName, contentType: 'application/octet-stream' });
+    
+//     try {
+//         const response = await axios.post(`${API_URL}/sendDocument`, form, {
+//             headers: { ...form.getHeaders() },
+//             maxContentLength: Infinity,
+//             maxBodyLength: Infinity,
+//             // FIX: Ensure the long timeout is applied here
+//             timeout: AXIOS_TIMEOUT, 
+//         });
+
+//         if (response.data.ok) return response.data.result.message_id;
+//         throw new Error(`Telegram API error: ${response.data.description}`);
+
+//     } catch (error) {
+//         if (error.response) {
+//             console.error('Telegram Upload Error Response:', error.response.data);
+//         } else {
+//             console.error('Telegram Upload Error Message:', error.message);
+//         }
+//         // It's crucial to re-throw the error so the calling function knows the transfer failed
+//         throw error;
+//     }
+// };
+
+// exports.getFileStream = async (messageId) => {
+//     try {
+//         const forwardResponse = await axios.post(`${API_URL}/forwardMessage`, {
+//             chat_id: CHAT_ID, from_chat_id: CHAT_ID, message_id: messageId
+//         }, { timeout: AXIOS_TIMEOUT }); // <-- FIX: Apply the long timeout here
+
+//         if (!forwardResponse.data.ok || !forwardResponse.data.result.document) {
+//             throw new Error('Failed to get file metadata by forwarding message.');
+//         }
+
+//         const fileId = forwardResponse.data.result.document.file_id;
+//         const forwardedMessageId = forwardResponse.data.result.message_id;
+
+//         const getFileResponse = await axios.post(`${API_URL}/getFile`, { file_id: fileId }, { timeout: AXIOS_TIMEOUT }); // <-- FIX: Apply the long timeout here
+        
+//         // Clean up the forwarded message in the background
+//         axios.post(`${API_URL}/deleteMessage`, { chat_id: CHAT_ID, message_id: forwardedMessageId })
+//             .catch(err => console.error("Non-critical: Could not delete forwarded message:", err.response?.data));
+
+//         if (!getFileResponse.data.ok) {
+//             throw new Error('Could not get file path from Telegram.');
+//         }
+        
+//         const filePath = getFileResponse.data.result.file_path;
+//         const fileUrl = `https://api.telegram.org/file/bot${TOKEN}/${filePath}`;
+
+//         const streamResponse = await axios({
+//             url: fileUrl, method: 'GET', responseType: 'stream', timeout: AXIOS_TIMEOUT // <-- FIX: Apply the long timeout here
+//         });
+
+//         return streamResponse.data;
+//     } catch (error) {
+//         if (error.response) {
+//             console.error(`Telegram getFileStream API Error for messageId ${messageId}:`, error.response.data);
+//         } else {
+//             console.error(`Telegram getFileStream General Error for messageId ${messageId}:`, error.message);
+//         }
+//         throw error;
+//     }
+// };
+
+
 // server/src/services/telegram.service.js
+const { TelegramClient } = require('telegram');
+const { StringSession } = require('telegram/sessions');
+const fs = require('fs');
 
-const axios = require('axios');
-const FormData = require('form-data');
+// Read credentials from .env
+const apiId = parseInt(process.env.API_ID, 10);
+const apiHash = process.env.API_HASH;
+const session = process.env.SESSION_STRING; // <-- Read the raw string first
+const storageChatId = parseInt(process.env.TELEGRAM_STORAGE_CHAT_ID, 10);
 
-const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
-const API_URL = `https://api.telegram.org/bot${TOKEN}`;
+// *** THE FIX IS HERE ***
+// We now validate the raw session string from the .env file.
+if (!apiId || !apiHash || !session || !storageChatId) {
+    throw new Error("FATAL: Telegram MTProto credentials are not fully configured. Please check API_ID, API_HASH, SESSION_STRING, and TELEGRAM_STORAGE_CHAT_ID in your .env file.");
+}
 
-// --- FIX: Define a very generous default timeout for all network requests ---
-// Set a 2-hour timeout (in milliseconds) to prevent failures on large file transfers.
-const AXIOS_TIMEOUT = 120 * 60 * 1000; 
+// Create the session object AFTER validation
+const stringSession = new StringSession(session);
 
-exports.uploadChunk = async (chunkBuffer, fileName) => {
-    const form = new FormData();
-    form.append('chat_id', CHAT_ID);
-    form.append('document', chunkBuffer, { filename: fileName, contentType: 'application/octet-stream' });
+// Create a single, persistent client instance for the application
+const client = new TelegramClient(stringSession, apiId, apiHash, {
+    connectionRetries: 5,
+});
 
+/**
+ * Initializes and connects the Telegram client. This should be called once when the server starts.
+ */
+exports.initializeTelegramClient = async () => {
+    console.log("Initializing Telegram MTProto client...");
+    await client.connect();
+    console.log("Telegram MTProto client connected successfully.");
+};
+
+// ... aof the functions (uploadFile, getFileStream) remain exactly the same ...
+exports.uploadFile = async (localFilePath, originalFileName) => {
     try {
-        const response = await axios.post(`${API_URL}/sendDocument`, form, {
-            headers: { ...form.getHeaders() },
-            maxContentLength: Infinity,
-            maxBodyLength: Infinity,
-            timeout: AXIOS_TIMEOUT, // <-- FIX: Apply the long timeout here
+        if (!client.connected) {
+            console.warn("Telegram client was disconnected. Reconnecting...");
+            await client.connect();
+        }
+        
+        const fileResult = await client.sendFile(storageChatId, {
+            file: localFilePath,
+            caption: originalFileName,
+            workers: 1, 
         });
-        if (response.data.ok) return response.data.result.message_id;
-        throw new Error(`Telegram API error: ${response.data.description}`);
+
+        return fileResult.id;
     } catch (error) {
-        if (error.response) console.error('Telegram Upload Error:', error.response.data);
-        else console.error('Telegram Upload Error:', error.message);
+        console.error(`Telegram Upload Error for ${originalFileName}:`, error);
         throw error;
     }
 };
 
 exports.getFileStream = async (messageId) => {
     try {
-        const forwardResponse = await axios.post(`${API_URL}/forwardMessage`, {
-            chat_id: CHAT_ID, from_chat_id: CHAT_ID, message_id: messageId
-        }, { timeout: AXIOS_TIMEOUT }); // <-- FIX: Apply the long timeout here
-
-        if (!forwardResponse.data.ok || !forwardResponse.data.result.document) {
-            throw new Error('Failed to get file metadata by forwarding message.');
+        if (!client.connected) {
+            console.warn("Telegram client was disconnected. Reconnecting...");
+            await client.connect();
         }
 
-        const fileId = forwardResponse.data.result.document.file_id;
-        const forwardedMessageId = forwardResponse.data.result.message_id;
-
-        const getFileResponse = await axios.post(`${API_URL}/getFile`, { file_id: fileId }, { timeout: AXIOS_TIMEOUT }); // <-- FIX: Apply the long timeout here
-        
-        // Clean up the forwarded message in the background
-        axios.post(`${API_URL}/deleteMessage`, { chat_id: CHAT_ID, message_id: forwardedMessageId })
-            .catch(err => console.error("Non-critical: Could not delete forwarded message:", err.response?.data));
-
-        if (!getFileResponse.data.ok) {
-            throw new Error('Could not get file path from Telegram.');
+        const message = await client.getMessages(storageChatId, { ids: [messageId] });
+        if (!message || message.length === 0 || !message[0].media) {
+            throw new Error(`File with messageId ${messageId} not found or has no media.`);
         }
-        
-        const filePath = getFileResponse.data.result.file_path;
-        const fileUrl = `https://api.telegram.org/file/bot${TOKEN}/${filePath}`;
 
-        const streamResponse = await axios({
-            url: fileUrl, method: 'GET', responseType: 'stream', timeout: AXIOS_TIMEOUT // <-- FIX: Apply the long timeout here
+        const buffer = await client.downloadMedia(message[0], {
+            workers: 1,
         });
 
-        return streamResponse.data;
+        const { Readable } = require('stream');
+        const readable = new Readable();
+        readable._read = () => {};
+        readable.push(buffer);
+        readable.push(null);
+
+        return readable;
     } catch (error) {
-        if (error.response) {
-            console.error(`Telegram getFileStream API Error for messageId ${messageId}:`, error.response.data);
-        } else {
-            console.error(`Telegram getFileStream General Error for messageId ${messageId}:`, error.message);
-        }
+        console.error(`Telegram getFileStream Error for messageId ${messageId}:`, error);
         throw error;
     }
 };
