@@ -572,7 +572,6 @@
 //     return response.data.files || [];
 // };
 
-// server/src/services/googleDrive.service.js
 const { google } = require('googleapis');
 
 // --- NEW OAUTH 2.0 CONFIGURATION ---
@@ -597,13 +596,23 @@ const oAuth2Client = new google.auth.OAuth2(
 // Set the refresh token, which allows us to get new access tokens automatically
 oAuth2Client.setCredentials({ refresh_token: GDRIVE_REFRESH_TOKEN });
 
-// Initialize the Drive API client with the authenticated OAuth2 client
-const drive = google.drive({ version: 'v3', auth: oAuth2Client });
-// --- END OF NEW CONFIGURATION ---
+// --- THE FIX IS HERE ---
+// We initialize the Drive API with a custom, much longer timeout.
+// This tells gaxios (the underlying HTTP client) to wait up to 2 hours for a response.
+const drive = google.drive({
+  version: 'v3',
+  auth: oAuth2Client,
+  // Set a global timeout for all requests made with this drive object.
+  // The value is in milliseconds. 120 * 60 * 1000 = 2 hours.
+  requestConfig: {
+    timeout: 120 * 60 * 1000,
+  },
+});
+// --- END OF FIX ---
 
 
+// Your `createFile` function does NOT need to change.
 exports.createFile = async (fileName, mimeType, fileStream) => {
-  // Now, when this runs, it acts on behalf of YOUR Google account.
   const response = await drive.files.create({
     requestBody: { name: fileName, parents: [GDRIVE_FOLDER_ID] },
     media: { mimeType: mimeType, body: fileStream },
@@ -612,13 +621,12 @@ exports.createFile = async (fileName, mimeType, fileStream) => {
   return response.data;
 };
 
-// This function is obsolete as files are created by the owner directly.
-// It is kept here to prevent crashes if called, but it does nothing.
 exports.transferOwnership = async (fileId) => {
     console.log(`OAuth2 Client used: Ownership of ${fileId} is already correct. No transfer needed.`);
     return;
 };
 
+// Also apply a long timeout for downloads, just in case.
 exports.getFileStream = async (fileId) => {
   const response = await drive.files.get(
     { fileId, alt: 'media', supportsAllDrives: true },

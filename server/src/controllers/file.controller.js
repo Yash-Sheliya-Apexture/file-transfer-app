@@ -2243,46 +2243,104 @@ exports.downloadFile = async (req, res, next) => {
     } catch (error) { next(error); }
 };
 
-// --- UPDATED ZIP DOWNLOAD LOGIC ---
+// // --- UPDATED ZIP DOWNLOAD LOGIC ---
+// exports.downloadGroupAsZip = async (req, res, next) => {
+//     const { groupId } = req.params;
+//     const tempDir = path.join(os.tmpdir(), `zip-${groupId}-${Date.now()}`);
+//     try {
+//         await fs.promises.mkdir(tempDir, { recursive: true });
+//         const files = await File.find({ groupId }).sort({ createdAt: 1 });
+//         if (!files || files.length === 0) { return res.status(404).json({ message: 'No files found.' }); }
+
+//         for (const file of files) {
+//             const localFilePath = path.join(tempDir, file.originalName);
+//             const writer = fs.createWriteStream(localFilePath);
+//             let sourceStream;
+
+//             if (file.status === 'IN_TELEGRAM' && file.telegramChunks && file.telegramChunks.length > 0) {
+//                 // Use the new merging helper function
+//                 sourceStream = await getMergedTelegramStream(file.telegramChunks);
+//             } else if ((file.status === 'IN_DRIVE' || file.status === 'ARCHIVING') && file.gDriveFileId) {
+//                 sourceStream = await gDriveService.getFileStream(file.gDriveFileId);
+//             } else { continue; }
+
+//             await new Promise((resolve, reject) => {
+//                 sourceStream.pipe(writer);
+//                 writer.on('finish', resolve);
+//                 writer.on('error', reject);
+//             });
+//         }
+
+//         const zipFileName = `${files[0].originalName.split('.')[0] || 'batch'}.zip`;
+//         res.setHeader('Content-Disposition', `attachment; filename="${zipFileName}"`);
+//         res.setHeader('Content-Type', 'application/zip');
+//         const archive = archiver('zip', { zlib: { level: 9 } });
+//         archive.pipe(res);
+//         archive.directory(tempDir, false);
+//         await archive.finalize();
+//     } catch (error) {
+//         next(error);
+//     } finally {
+//         fs.promises.rm(tempDir, { recursive: true, force: true }).catch(err => console.error("Error cleaning temp zip dir:", err));
+//     }
+// };
+
+// server/src/controllers/file.controller.js
+
+// ... (keep all other functions the same)
+
+// --- REWRITTEN ZIP DOWNLOAD LOGIC (NO TEMP FILES) ---
 exports.downloadGroupAsZip = async (req, res, next) => {
     const { groupId } = req.params;
-    const tempDir = path.join(os.tmpdir(), `zip-${groupId}-${Date.now()}`);
     try {
-        await fs.promises.mkdir(tempDir, { recursive: true });
         const files = await File.find({ groupId }).sort({ createdAt: 1 });
-        if (!files || files.length === 0) { return res.status(404).json({ message: 'No files found.' }); }
-
-        for (const file of files) {
-            const localFilePath = path.join(tempDir, file.originalName);
-            const writer = fs.createWriteStream(localFilePath);
-            let sourceStream;
-
-            if (file.status === 'IN_TELEGRAM' && file.telegramChunks && file.telegramChunks.length > 0) {
-                // Use the new merging helper function
-                sourceStream = await getMergedTelegramStream(file.telegramChunks);
-            } else if ((file.status === 'IN_DRIVE' || file.status === 'ARCHIVING') && file.gDriveFileId) {
-                sourceStream = await gDriveService.getFileStream(file.gDriveFileId);
-            } else { continue; }
-
-            await new Promise((resolve, reject) => {
-                sourceStream.pipe(writer);
-                writer.on('finish', resolve);
-                writer.on('error', reject);
-            });
+        if (!files || files.length === 0) {
+            return res.status(404).json({ message: 'No files found.' });
         }
 
         const zipFileName = `${files[0].originalName.split('.')[0] || 'batch'}.zip`;
         res.setHeader('Content-Disposition', `attachment; filename="${zipFileName}"`);
         res.setHeader('Content-Type', 'application/zip');
+
         const archive = archiver('zip', { zlib: { level: 9 } });
+
+        // If archive creation fails, forward the error to the client.
+        archive.on('error', (err) => {
+            throw err;
+        });
+
+        // Pipe the archive stream directly to the response.
         archive.pipe(res);
-        archive.directory(tempDir, false);
+
+        // This loop processes files sequentially to avoid overwhelming the server.
+        for (const file of files) {
+            let sourceStream;
+
+            if (file.status === 'IN_TELEGRAM' && file.telegramChunks?.length > 0) {
+                console.log(`[ZIP] Appending ${file.originalName} from Telegram.`);
+                sourceStream = await getMergedTelegramStream(file.telegramChunks);
+            } else if ((file.status === 'IN_DRIVE' || file.status === 'ARCHIVING') && file.gDriveFileId) {
+                console.log(`[ZIP] Appending ${file.originalName} from Drive.`);
+                sourceStream = await gDriveService.getFileStream(file.gDriveFileId);
+            } else {
+                // Skip files that are in an error state or not available.
+                console.warn(`[ZIP] Skipping unavailable file: ${file.originalName}`);
+                continue;
+            }
+
+            // Append the file stream directly to the archive.
+            // The archiver will handle consuming the stream.
+            archive.append(sourceStream, { name: file.originalName });
+        }
+
+        // Finalize the archive, which tells it no more files will be added.
+        // The response will automatically end when the archive stream is fully piped.
         await archive.finalize();
+
     } catch (error) {
         next(error);
-    } finally {
-        fs.promises.rm(tempDir, { recursive: true, force: true }).catch(err => console.error("Error cleaning temp zip dir:", err));
     }
+    // No 'finally' block needed to clean up files, because none were created!
 };
 
 
