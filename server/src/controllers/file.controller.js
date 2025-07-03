@@ -2419,12 +2419,14 @@ async function transferGroupToTelegram(groupId) {
             const gDriveStream = await gDriveService.getFileStream(fileDoc.gDriveFileId);
             const writer = fs.createWriteStream(tempFilePath);
             await new Promise((resolve, reject) => { gDriveStream.pipe(writer); writer.on('finish', resolve); writer.on('error', reject); });
+            
             const fileStats = await fs.promises.stat(tempFilePath);
             const chunkData = [];
             let firstThumbnail = null;
+
             if (fileStats.size <= TELEGRAM_CHUNK_SIZE) {
                 console.log(`[GROUP ${groupId}] File ${fileDoc.originalName} is small enough. Uploading as single part.`);
-                const { messageId, thumbnailBytes } = await telegramService.uploadFile(tempFilePath, fileDoc.originalName, fileStats.size);
+                const { messageId, thumbnailBytes } = await telegramService.uploadFile(tempFilePath, fileDoc.originalName);
                 chunkData.push({ order: 0, messageId, size: fileStats.size });
                 if (thumbnailBytes) firstThumbnail = thumbnailBytes;
             } else {
@@ -2432,10 +2434,25 @@ async function transferGroupToTelegram(groupId) {
                 let chunkIndex = 0;
                 for (let offset = 0; offset < fileStats.size; offset += TELEGRAM_CHUNK_SIZE) {
                     const bytesToRead = Math.min(TELEGRAM_CHUNK_SIZE, fileStats.size - offset);
-                    const chunkStream = fs.createReadStream(tempFilePath, { start: offset, end: offset + bytesToRead - 1 });
-                    console.log(`[GROUP ${groupId}] Uploading chunk ${chunkIndex + 1}...`);
                     const chunkFileName = `${fileDoc.originalName}.part${String(chunkIndex).padStart(3, '0')}`;
-                    const { messageId, thumbnailBytes } = await telegramService.uploadFile(chunkStream, chunkFileName, bytesToRead);
+                    const chunkFilePath = `${tempFilePath}.part${chunkIndex}`;
+
+                    // --- THE FIX: Stream chunk to a temporary file on disk ---
+                    const readStream = fs.createReadStream(tempFilePath, { start: offset, end: offset + bytesToRead - 1 });
+                    const writeStream = fs.createWriteStream(chunkFilePath);
+                    await new Promise((resolve, reject) => {
+                        readStream.pipe(writeStream);
+                        writeStream.on('finish', resolve);
+                        writeStream.on('error', reject);
+                    });
+                    
+                    console.log(`[GROUP ${groupId}] Uploading chunk ${chunkIndex + 1}...`);
+                    // Pass the path to the new chunk file to the service
+                    const { messageId, thumbnailBytes } = await telegramService.uploadFile(chunkFilePath, chunkFileName);
+                    
+                    // Clean up the temporary chunk file
+                    await fs.promises.unlink(chunkFilePath);
+
                     if (chunkIndex === 0 && thumbnailBytes) firstThumbnail = thumbnailBytes;
                     chunkData.push({ order: chunkIndex, messageId, size: bytesToRead });
                     chunkIndex++;
@@ -2495,9 +2512,7 @@ async function getMergedTelegramStream(telegramChunks) {
 }
 
 exports.downloadFile = async (req, res, next) => {
-    // --- ADD THIS LINE ---
-    res.setTimeout(0); // Disable timeout for this response
-
+    res.setTimeout(0);
     try {
         const file = await File.findOne({ uniqueId: req.params.uniqueId });
         if (!file) { return res.status(404).json({ message: 'File not found.' }); }
@@ -2519,9 +2534,7 @@ exports.downloadFile = async (req, res, next) => {
 };
 
 exports.downloadGroupAsZip = async (req, res, next) => {
-    // --- ADD THIS LINE ---
-    res.setTimeout(0); // Disable timeout for this response
-
+    res.setTimeout(0);
     const { groupId } = req.params;
     const tempDir = path.join(TEMP_UPLOAD_DIR, `zip-${groupId}-${Date.now()}`);
     try {
