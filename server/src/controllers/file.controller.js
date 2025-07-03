@@ -2377,7 +2377,7 @@ const TEMP_UPLOAD_DIR = path.join(__dirname, '..', '..', 'tmp-uploads');
 fs.mkdirSync(TEMP_UPLOAD_DIR, { recursive: true });
 
 // Set a safe chunk size, just under the 2GB limit (1.9 GB)
-const TELEGRAM_CHUNK_SIZE = 1.9 * 1024 * 1024 * 1024;
+const TELEGRAM_CHUNK_SIZE = Math.floor(1.9 * 1024 * 1024 * 1024);
 
 // --- UPLOAD & IMMEDIATE TRIGGER LOGIC (No changes here) ---
 exports.uploadFile = async (req, res, next) => {
