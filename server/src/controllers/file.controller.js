@@ -2364,27 +2364,23 @@
 
 const File = require('../models/File');
 const gDriveService = require('../services/googleDrive.service');
-const telegramService =require('../services/telegram.service');
+const telegramService = require('../services/telegram.service');
 const { PassThrough } = require('stream');
 const archiver = require('archiver');
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 
-// --- NEW ---
-// 1. Define a reliable temporary directory on the persistent disk
+// Define a reliable temporary directory on the persistent disk
 const TEMP_UPLOAD_DIR = path.join(__dirname, '..', '..', 'tmp-uploads');
 
-// 2. Ensure this directory exists when the application starts
+// Ensure this directory exists when the application starts
 fs.mkdirSync(TEMP_UPLOAD_DIR, { recursive: true });
-// --- END NEW ---
 
 // Set a safe chunk size, just under the 2GB limit (1.9 GB)
 const TELEGRAM_CHUNK_SIZE = 1.9 * 1024 * 1024 * 1024;
 
 // --- UPLOAD & IMMEDIATE TRIGGER LOGIC (No changes here) ---
 exports.uploadFile = async (req, res, next) => {
-    // This function remains unchanged.
     let fileDoc;
     try {
         const fileName = decodeURIComponent(req.headers['x-file-name']);
@@ -2417,22 +2413,17 @@ exports.uploadFile = async (req, res, next) => {
 };
 
 
-// --- REWRITTEN BACKGROUND TRANSFER WITH CHUNKING ---
+// --- REWRITTEN BACKGROUND TRANSFER WITH STREAMING CHUNKS ---
 async function transferGroupToTelegram(groupId) {
     const filesInGroup = await File.find({ groupId, status: 'IN_DRIVE' });
     let allTransfersSucceeded = true;
     console.log(`[GROUP ${groupId}] Starting MTProto transfer for ${filesInGroup.length} files.`);
 
     for (const fileDoc of filesInGroup) {
-        // --- MODIFIED ---
-        // Use our new reliable temp directory instead of os.tmpdir()
         const tempFilePath = path.join(TEMP_UPLOAD_DIR, `transfer-${fileDoc.uniqueId}-${fileDoc.originalName}`);
-        // --- END MODIFIED ---
-
         try {
             await fileDoc.updateOne({ status: 'ARCHIVING' });
 
-            // 1. Download file from Google Drive to a temporary local file.
             console.log(`[GROUP ${groupId}] Downloading ${fileDoc.originalName} from Drive to temp storage...`);
             const gDriveStream = await gDriveService.getFileStream(fileDoc.gDriveFileId);
             const writer = fs.createWriteStream(tempFilePath);
@@ -2442,43 +2433,34 @@ async function transferGroupToTelegram(groupId) {
                 writer.on('error', reject);
             });
 
-            // 2. Check file size and decide whether to chunk.
             const fileStats = await fs.promises.stat(tempFilePath);
             const chunkData = [];
 
             if (fileStats.size <= TELEGRAM_CHUNK_SIZE) {
-                // --- A) FILE IS SMALL ENOUGH, UPLOAD AS ONE PIECE ---
                 console.log(`[GROUP ${groupId}] File ${fileDoc.originalName} is small enough. Uploading as single part.`);
                 const messageId = await telegramService.uploadFile(tempFilePath, fileDoc.originalName);
                 chunkData.push({ order: 0, messageId: messageId, size: fileStats.size });
             } else {
-                // --- B) FILE IS TOO LARGE, MUST BE CHUNKED ---
                 console.log(`[GROUP ${groupId}] File ${fileDoc.originalName} is too large (${(fileStats.size / 1e9).toFixed(2)} GB). Starting chunking process.`);
-                const fileHandle = await fs.promises.open(tempFilePath, 'r');
                 let chunkIndex = 0;
                 for (let offset = 0; offset < fileStats.size; offset += TELEGRAM_CHUNK_SIZE) {
                     const bytesToRead = Math.min(TELEGRAM_CHUNK_SIZE, fileStats.size - offset);
-                    const chunkBuffer = Buffer.alloc(bytesToRead);
-                    await fileHandle.read(chunkBuffer, 0, bytesToRead, offset);
-
-                    // Create a temporary file for this specific chunk
-                    const chunkFilePath = `${tempFilePath}.part${chunkIndex}`;
-                    await fs.promises.writeFile(chunkFilePath, chunkBuffer);
+                    
+                    // --- THE FIX: Create a stream for the chunk instead of loading it into memory ---
+                    const chunkStream = fs.createReadStream(tempFilePath, {
+                        start: offset,
+                        end: offset + bytesToRead - 1,
+                    });
 
                     console.log(`[GROUP ${groupId}] Uploading chunk ${chunkIndex + 1}...`);
                     const chunkFileName = `${fileDoc.originalName}.part${String(chunkIndex).padStart(3, '0')}`;
-                    const messageId = await telegramService.uploadFile(chunkFilePath, chunkFileName);
+                    const messageId = await telegramService.uploadFile(chunkStream, chunkFileName);
                     
                     chunkData.push({ order: chunkIndex, messageId, size: bytesToRead });
-                    
-                    // Clean up the temporary chunk file
-                    await fs.promises.unlink(chunkFilePath);
                     chunkIndex++;
                 }
-                await fileHandle.close();
             }
 
-            // 3. Update database with the new chunk information.
             await fileDoc.updateOne({ telegramChunks: chunkData, status: 'IN_TELEGRAM' });
             console.log(`[GROUP ${groupId}] SUCCESS: Transferred ${fileDoc.originalName} to Telegram in ${chunkData.length} chunk(s).`);
 
@@ -2488,14 +2470,12 @@ async function transferGroupToTelegram(groupId) {
             allTransfersSucceeded = false;
             break;
         } finally {
-            // 4. Clean up the main temporary file.
             if (fs.existsSync(tempFilePath)) {
                 await fs.promises.unlink(tempFilePath);
             }
         }
     }
 
-    // This cleanup logic for Google Drive remains unchanged.
     if (allTransfersSucceeded) {
         console.log(`[GROUP ${groupId}] All transfers successful. Cleaning up from Google Drive.`);
         const successfullyTransferredFiles = await File.find({ groupId, status: 'IN_TELEGRAM' });
@@ -2519,29 +2499,23 @@ exports.transferGroupToTelegram = transferGroupToTelegram;
 
 // --- HELPER FUNCTION TO MERGE TELEGRAM CHUNKS INTO A SINGLE STREAM ---
 async function getMergedTelegramStream(telegramChunks) {
-    // Sort chunks by order just in case they are not stored correctly
     const sortedChunks = telegramChunks.sort((a, b) => a.order - b.order);
     const passThrough = new PassThrough();
 
-    // Use an async IIFE to handle the sequential fetching and piping
     (async () => {
         for (const chunk of sortedChunks) {
             try {
                 const chunkStream = await telegramService.getFileStream(chunk.messageId);
-                // Pipe the chunk stream into the main passThrough stream
-                // 'end: false' prevents the main stream from closing after the first chunk
                 await new Promise((resolve, reject) => {
                     chunkStream.pipe(passThrough, { end: false });
                     chunkStream.on('end', resolve);
-                    chunkStream.on('error', reject); // Propagate errors
+                    chunkStream.on('error', reject);
                 });
             } catch (err) {
-                // If any chunk fails, emit an error on the main stream and stop.
                 passThrough.emit('error', new Error(`Failed to fetch chunk ${chunk.order}: ${err.message}`));
                 return;
             }
         }
-        // After all chunks are successfully piped, end the main stream.
         passThrough.end();
     })().catch(err => passThrough.emit('error', err));
 
@@ -2564,7 +2538,6 @@ exports.downloadFile = async (req, res, next) => {
                  return res.status(500).json({ message: 'File is in Telegram but has no chunk data.' });
             }
             
-            // This function now handles both single-chunk and multi-chunk files.
             console.log(`[DOWNLOAD] Streaming ${file.originalName} from Telegram in ${file.telegramChunks.length} chunk(s).`);
             const mergedStream = await getMergedTelegramStream(file.telegramChunks);
             mergedStream.pipe(res);
@@ -2581,9 +2554,7 @@ exports.downloadFile = async (req, res, next) => {
 // --- UPDATED ZIP DOWNLOAD LOGIC ---
 exports.downloadGroupAsZip = async (req, res, next) => {
     const { groupId } = req.params;
-    // --- MODIFIED ---
     const tempDir = path.join(TEMP_UPLOAD_DIR, `zip-${groupId}-${Date.now()}`);
-    // --- END MODIFIED ---
     
     try {
         await fs.promises.mkdir(tempDir, { recursive: true });
@@ -2596,7 +2567,6 @@ exports.downloadGroupAsZip = async (req, res, next) => {
             let sourceStream;
 
             if (file.status === 'IN_TELEGRAM' && file.telegramChunks && file.telegramChunks.length > 0) {
-                // Use the new merging helper function
                 sourceStream = await getMergedTelegramStream(file.telegramChunks);
             } else if ((file.status === 'IN_DRIVE' || file.status === 'ARCHIVING') && file.gDriveFileId) {
                 sourceStream = await gDriveService.getFileStream(file.gDriveFileId);
