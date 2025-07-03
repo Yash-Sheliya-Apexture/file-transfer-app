@@ -636,15 +636,116 @@
 //     }
 // };
 
-// server/src/services/telegram.service.js
+// // server/src/services/telegram.service.js
+
+// const { TelegramClient } = require('telegram');
+// const { StringSession } = require('telegram/sessions');
+// // We no longer need to import a specific connection type
+// // const { TCPObfuscated } = require('telegram/network'); 
+// const fs = require('fs');
+
+// // Read credentials from .env
+// const apiId = parseInt(process.env.API_ID, 10);
+// const apiHash = process.env.API_HASH;
+// const session = process.env.SESSION_STRING;
+// const storageChatId = parseInt(process.env.TELEGRAM_STORAGE_CHAT_ID, 10);
+
+// if (!apiId || !apiHash || !session || !storageChatId) {
+//     throw new Error("FATAL: Telegram MTProto credentials are not fully configured. Please check API_ID, API_HASH, SESSION_STRING, and TELEGRAM_STORAGE_CHAT_ID in your .env file.");
+// }
+
+// const stringSession = new StringSession(session);
+
+// // --- THE DEFINITIVE FIX ---
+// // We will remove the `connection` option altogether and let the library
+// // use its default, most robust connection strategy. This eliminates the source of the crash.
+// const client = new TelegramClient(stringSession, apiId, apiHash, {
+//     // REMOVED: `connection: TCPObfuscated,` 
+//     // This was the line causing the crash.
+    
+//     // These options are still valuable.
+//     timeout: 30 * 1000, 
+//     connectionRetries: 5,
+// });
+
+// // The rest of the file remains exactly as it was in the previous correct attempts.
+// // The keep-alive logic is sound and necessary.
+
+// exports.client = client;
+
+// exports.initializeTelegramClient = async () => {
+//     console.log("Initializing Telegram MTProto client...");
+//     console.log("Telegram MTProto client is ready.");
+// };
+
+// exports.checkTelegramConnection = async () => {
+//     try {
+//         if (!client.connected) {
+//             console.log('TELEGRAM KEEPALIVE: Client is disconnected. Attempting to connect...');
+//             await client.connect();
+//         }
+//         // This is a harmless request to keep the TCP socket alive.
+//         await client.getMe(); 
+//     } catch (error) {
+//         // Only log the error message for cleaner output.
+//         console.error('TELEGRAM KEEPALIVE: Health check failed:', error.message);
+//     }
+// };
+
+// // ... aof the functions (uploadFile, getFileStream) remain exactly the same ...
+// exports.uploadFile = async (localFilePath, originalFileName) => {
+//     try {
+//         if (!client.connected) {
+//             console.warn("Telegram Upload: Client was disconnected. Reconnecting...");
+//             await client.connect();
+//         }
+        
+//         const fileResult = await client.sendFile(storageChatId, {
+//             file: localFilePath,
+//             caption: originalFileName,
+//             workers: 1, 
+//         });
+
+//         return fileResult.id;
+//     } catch (error) {
+//         console.error(`Telegram Upload Error for ${originalFileName}:`, error);
+//         throw error;
+//     }
+// };
+
+// exports.getFileStream = async (messageId) => {
+//     try {
+//         if (!client.connected) {
+//             console.warn("Telegram Download: Client was disconnected. Reconnecting...");
+//             await client.connect();
+//         }
+
+//         const message = await client.getMessages(storageChatId, { ids: [messageId] });
+//         if (!message || message.length === 0 || !message[0].media) {
+//             throw new Error(`File with messageId ${messageId} not found or has no media.`);
+//         }
+
+//         const buffer = await client.downloadMedia(message[0], {
+//             workers: 1,
+//         });
+
+//         const { Readable } = require('stream');
+//         const readable = new Readable();
+//         readable._read = () => {};
+//         readable.push(buffer);
+//         readable.push(null);
+
+//         return readable;
+//     } catch (error) {
+//         console.error(`Telegram getFileStream Error for messageId ${messageId}:`, error);
+//         throw error;
+//     }
+// };
 
 const { TelegramClient } = require('telegram');
 const { StringSession } = require('telegram/sessions');
-// We no longer need to import a specific connection type
-// const { TCPObfuscated } = require('telegram/network'); 
 const fs = require('fs');
 
-// Read credentials from .env
 const apiId = parseInt(process.env.API_ID, 10);
 const apiHash = process.env.API_HASH;
 const session = process.env.SESSION_STRING;
@@ -656,44 +757,18 @@ if (!apiId || !apiHash || !session || !storageChatId) {
 
 const stringSession = new StringSession(session);
 
-// --- THE DEFINITIVE FIX ---
-// We will remove the `connection` option altogether and let the library
-// use its default, most robust connection strategy. This eliminates the source of the crash.
 const client = new TelegramClient(stringSession, apiId, apiHash, {
-    // REMOVED: `connection: TCPObfuscated,` 
-    // This was the line causing the crash.
-    
-    // These options are still valuable.
-    timeout: 30 * 1000, 
     connectionRetries: 5,
 });
 
-// The rest of the file remains exactly as it was in the previous correct attempts.
-// The keep-alive logic is sound and necessary.
-
-exports.client = client;
-
 exports.initializeTelegramClient = async () => {
     console.log("Initializing Telegram MTProto client...");
-    console.log("Telegram MTProto client is ready.");
+    await client.connect();
+    console.log("Telegram MTProto client connected successfully.");
 };
 
-exports.checkTelegramConnection = async () => {
-    try {
-        if (!client.connected) {
-            console.log('TELEGRAM KEEPALIVE: Client is disconnected. Attempting to connect...');
-            await client.connect();
-        }
-        // This is a harmless request to keep the TCP socket alive.
-        await client.getMe(); 
-    } catch (error) {
-        // Only log the error message for cleaner output.
-        console.error('TELEGRAM KEEPALIVE: Health check failed:', error.message);
-    }
-};
-
-// ... aof the functions (uploadFile, getFileStream) remain exactly the same ...
-exports.uploadFile = async (localFilePath, originalFileName) => {
+// --- MODIFIED uploadFile FUNCTION ---
+exports.uploadFile = async (fileSource, originalFileName, fileSize) => {
     try {
         if (!client.connected) {
             console.warn("Telegram Upload: Client was disconnected. Reconnecting...");
@@ -701,12 +776,24 @@ exports.uploadFile = async (localFilePath, originalFileName) => {
         }
         
         const fileResult = await client.sendFile(storageChatId, {
-            file: localFilePath,
+            file: fileSource,
             caption: originalFileName,
-            workers: 1, 
+            workers: 1,
+            fileSize: fileSize, // <-- The key fix for the error
         });
 
-        return fileResult.id;
+        // --- NEW: Extract the thumbnail ---
+        let thumbnailBytes = null;
+        if (fileResult.media?.document?.thumbs) {
+            // Find the stripped thumbnail (type 'i'), which is the smallest placeholder
+            const strippedThumb = fileResult.media.document.thumbs.find(thumb => thumb.className === 'PhotoStrippedSize');
+            if (strippedThumb && strippedThumb.bytes) {
+                thumbnailBytes = strippedThumb.bytes;
+            }
+        }
+        
+        return { messageId: fileResult.id, thumbnailBytes };
+
     } catch (error) {
         console.error(`Telegram Upload Error for ${originalFileName}:`, error);
         throw error;
@@ -716,7 +803,7 @@ exports.uploadFile = async (localFilePath, originalFileName) => {
 exports.getFileStream = async (messageId) => {
     try {
         if (!client.connected) {
-            console.warn("Telegram Download: Client was disconnected. Reconnecting...");
+            console.warn("Telegram client was disconnected. Reconnecting...");
             await client.connect();
         }
 
