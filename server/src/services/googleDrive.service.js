@@ -574,7 +574,7 @@
 
 const { google } = require('googleapis');
 
-// --- OAUTH 2.0 CONFIGURATION ---
+// --- NEW OAUTH 2.0 CONFIGURATION ---
 const GDRIVE_FOLDER_ID = process.env.GDRIVE_FOLDER_ID;
 const GDRIVE_CLIENT_ID = process.env.GDRIVE_CLIENT_ID;
 const GDRIVE_CLIENT_SECRET = process.env.GDRIVE_CLIENT_SECRET;
@@ -593,19 +593,25 @@ const oAuth2Client = new google.auth.OAuth2(
     GDRIVE_REDIRECT_URI
 );
 
-// Set the refresh token
+// Set the refresh token, which allows us to get new access tokens automatically
 oAuth2Client.setCredentials({ refresh_token: GDRIVE_REFRESH_TOKEN });
 
-// Initialize the Drive API client with a long timeout
+// --- THE FIX IS HERE ---
+// We initialize the Drive API with a custom, much longer timeout.
+// This tells gaxios (the underlying HTTP client) to wait up to 2 hours for a response.
 const drive = google.drive({
   version: 'v3',
   auth: oAuth2Client,
-  // Set a global 2-hour timeout for all requests made with this drive object.
+  // Set a global timeout for all requests made with this drive object.
+  // The value is in milliseconds. 120 * 60 * 1000 = 2 hours.
   requestConfig: {
     timeout: 120 * 60 * 1000,
   },
 });
+// --- END OF FIX ---
 
+
+// Your `createFile` function does NOT need to change.
 exports.createFile = async (fileName, mimeType, fileStream) => {
   const response = await drive.files.create({
     requestBody: { name: fileName, parents: [GDRIVE_FOLDER_ID] },
@@ -615,8 +621,13 @@ exports.createFile = async (fileName, mimeType, fileStream) => {
   return response.data;
 };
 
+exports.transferOwnership = async (fileId) => {
+    console.log(`OAuth2 Client used: Ownership of ${fileId} is already correct. No transfer needed.`);
+    return;
+};
+
+// Also apply a long timeout for downloads, just in case.
 exports.getFileStream = async (fileId) => {
-  // Use a specific long timeout for downloading as well
   const response = await drive.files.get(
     { fileId, alt: 'media', supportsAllDrives: true },
     { responseType: 'stream', timeout: 120 * 60 * 1000 }

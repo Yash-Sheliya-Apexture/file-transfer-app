@@ -829,81 +829,177 @@
 //     }
 // };
 
-const axios = require('axios');
+// const axios = require('axios');
+// const fs = require('fs');
+// const FormData = require('form-data');
+
+// const botToken = process.env.TELEGRAM_BOT_TOKEN;
+// const storageChatId = process.env.TELEGRAM_STORAGE_CHAT_ID;
+
+// if (!botToken || !storageChatId) {
+//     throw new Error("FATAL: Telegram Bot credentials are not fully configured. Please check TELEGRAM_BOT_TOKEN and TELEGRAM_STORAGE_CHAT_ID in your .env file.");
+// }
+
+// const botApiUrl = `https://api.telegram.org/bot${botToken}`;
+
+// // Helper function for creating a delay
+// const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// /**
+//  * Uploads a file using the Telegram Bot API with rate-limit handling.
+//  */
+// exports.uploadFile = async (localFilePath, originalFileName) => {
+//     const url = `${botApiUrl}/sendDocument`;
+//     const maxRetries = 5;
+
+//     for (let attempt = 1; attempt <= maxRetries; attempt++) {
+//         const form = new FormData();
+//         form.append('chat_id', storageChatId);
+//         form.append('document', fs.createReadStream(localFilePath), originalFileName);
+//         form.append('caption', originalFileName);
+
+//         try {
+//             const response = await axios.post(url, form, {
+//                 headers: form.getHeaders(),
+//             });
+
+//             const result = response.data.result;
+//             const messageId = result.message_id;
+//             let thumbnailBytes = null;
+
+//             if (result.document?.thumb) {
+//                 const thumbInfo = result.document.thumb;
+//                 const fileResponse = await axios.get(`${botApiUrl}/getFile`, { params: { file_id: thumbInfo.file_id } });
+//                 const filePath = fileResponse.data.result.file_path;
+//                 const thumbDownloadUrl = `https://api.telegram.org/file/bot${botToken}/${filePath}`;
+//                 const thumbResponse = await axios.get(thumbDownloadUrl, { responseType: 'arraybuffer' });
+//                 thumbnailBytes = Buffer.from(thumbResponse.data, 'binary');
+//             }
+
+//             // If successful, return the result and exit the loop
+//             return { messageId, thumbnailBytes };
+
+//         } catch (error) {
+//             // Check if this is a rate-limit error (429)
+//             if (error.response && error.response.status === 429) {
+//                 const retryAfter = error.response.data.parameters?.retry_after || 10;
+//                 console.warn(`[RATE LIMIT] Telegram limit hit. Waiting for ${retryAfter} seconds (Attempt ${attempt}/${maxRetries}).`);
+                
+//                 if (attempt === maxRetries) {
+//                     throw new Error(`Upload failed after ${maxRetries} retries due to rate limiting.`);
+//                 }
+                
+//                 await delay((retryAfter + 1) * 1000); // Wait for the specified time + 1s buffer
+//             } else {
+//                 // If it's another type of error, throw it immediately
+//                 console.error(`Telegram Bot Upload Error for ${originalFileName}:`, error.response ? error.response.data : error.message);
+//                 throw new Error(error.response?.data?.description || 'Telegram Bot API upload failed.');
+//             }
+//         }
+//     }
+// };
+
+// /**
+//  * Gets a file stream using the Telegram Bot API.
+//  */
+// exports.getFileStream = async (messageId) => {
+//     // This function remains a placeholder as it requires a larger architectural change
+//     // to store file_id instead of message_id.
+//     throw new Error("File download is not supported in this Bot API implementation without storing file_id. The architecture must be updated.");
+// };
+
+
+const { TelegramClient } = require('telegram');
+const { StringSession } = require('telegram/sessions');
 const fs = require('fs');
-const FormData = require('form-data');
 
-const botToken = process.env.TELEGRAM_BOT_TOKEN;
-const storageChatId = process.env.TELEGRAM_STORAGE_CHAT_ID;
+const apiId = parseInt(process.env.API_ID, 10);
+const apiHash = process.env.API_HASH;
+const session = process.env.SESSION_STRING;
+const storageChatId = parseInt(process.env.TELEGRAM_STORAGE_CHAT_ID, 10);
 
-if (!botToken || !storageChatId) {
-    throw new Error("FATAL: Telegram Bot credentials are not fully configured. Please check TELEGRAM_BOT_TOKEN and TELEGRAM_STORAGE_CHAT_ID in your .env file.");
+if (!apiId || !apiHash || !session || !storageChatId) {
+    throw new Error("FATAL: Telegram MTProto credentials are not fully configured. Please check API_ID, API_HASH, SESSION_STRING, and TELEGRAM_STORAGE_CHAT_ID in your .env file.");
 }
 
-const botApiUrl = `https://api.telegram.org/bot${botToken}`;
+const stringSession = new StringSession(session);
 
-// Helper function for creating a delay
-const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+const client = new TelegramClient(stringSession, apiId, apiHash, {
+    connectionRetries: 5,
+});
+
+exports.initializeTelegramClient = async () => {
+    console.log("Initializing Telegram MTProto client...");
+    await client.connect();
+    console.log("Telegram MTProto client connected successfully.");
+};
 
 /**
- * Uploads a file using the Telegram Bot API with rate-limit handling.
+ * Uploads a file using the Telegram MTProto API.
+ * @param {string} localFilePath - The path to the local file to upload.
+ * @param {string} originalFileName - The name of the file.
+ * @returns {object} An object containing the messageId and thumbnailBytes.
  */
 exports.uploadFile = async (localFilePath, originalFileName) => {
-    const url = `${botApiUrl}/sendDocument`;
-    const maxRetries = 5;
+    try {
+        if (!client.connected) {
+            console.warn("Telegram Upload: Client was disconnected. Reconnecting...");
+            await client.connect();
+        }
+        
+        const fileResult = await client.sendFile(storageChatId, {
+            file: localFilePath,
+            caption: originalFileName,
+            workers: 1,
+        });
 
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        const form = new FormData();
-        form.append('chat_id', storageChatId);
-        form.append('document', fs.createReadStream(localFilePath), originalFileName);
-        form.append('caption', originalFileName);
-
-        try {
-            const response = await axios.post(url, form, {
-                headers: form.getHeaders(),
-            });
-
-            const result = response.data.result;
-            const messageId = result.message_id;
-            let thumbnailBytes = null;
-
-            if (result.document?.thumb) {
-                const thumbInfo = result.document.thumb;
-                const fileResponse = await axios.get(`${botApiUrl}/getFile`, { params: { file_id: thumbInfo.file_id } });
-                const filePath = fileResponse.data.result.file_path;
-                const thumbDownloadUrl = `https://api.telegram.org/file/bot${botToken}/${filePath}`;
-                const thumbResponse = await axios.get(thumbDownloadUrl, { responseType: 'arraybuffer' });
-                thumbnailBytes = Buffer.from(thumbResponse.data, 'binary');
-            }
-
-            // If successful, return the result and exit the loop
-            return { messageId, thumbnailBytes };
-
-        } catch (error) {
-            // Check if this is a rate-limit error (429)
-            if (error.response && error.response.status === 429) {
-                const retryAfter = error.response.data.parameters?.retry_after || 10;
-                console.warn(`[RATE LIMIT] Telegram limit hit. Waiting for ${retryAfter} seconds (Attempt ${attempt}/${maxRetries}).`);
-                
-                if (attempt === maxRetries) {
-                    throw new Error(`Upload failed after ${maxRetries} retries due to rate limiting.`);
-                }
-                
-                await delay((retryAfter + 1) * 1000); // Wait for the specified time + 1s buffer
-            } else {
-                // If it's another type of error, throw it immediately
-                console.error(`Telegram Bot Upload Error for ${originalFileName}:`, error.response ? error.response.data : error.message);
-                throw new Error(error.response?.data?.description || 'Telegram Bot API upload failed.');
+        // Extract the smallest thumbnail (type 'i') for a fast preview
+        let thumbnailBytes = null;
+        if (fileResult.media?.document?.thumbs) {
+            const strippedThumb = fileResult.media.document.thumbs.find(thumb => thumb.className === 'PhotoStrippedSize');
+            if (strippedThumb && strippedThumb.bytes) {
+                thumbnailBytes = strippedThumb.bytes;
             }
         }
+        
+        return { messageId: fileResult.id, thumbnailBytes };
+
+    } catch (error) {
+        console.error(`Telegram Upload Error for ${originalFileName}:`, error);
+        throw error;
     }
 };
 
 /**
- * Gets a file stream using the Telegram Bot API.
+ * Gets a file stream using the Telegram MTProto API.
+ * @param {number} messageId - The message ID of the file.
+ * @returns {ReadableStream} A readable stream of the file content.
  */
 exports.getFileStream = async (messageId) => {
-    // This function remains a placeholder as it requires a larger architectural change
-    // to store file_id instead of message_id.
-    throw new Error("File download is not supported in this Bot API implementation without storing file_id. The architecture must be updated.");
+    try {
+        if (!client.connected) {
+            console.warn("Telegram client was disconnected. Reconnecting...");
+            await client.connect();
+        }
+
+        const message = await client.getMessages(storageChatId, { ids: [messageId] });
+        if (!message || message.length === 0 || !message[0].media) {
+            throw new Error(`File with messageId ${messageId} not found or has no media.`);
+        }
+
+        const buffer = await client.downloadMedia(message[0], {
+            workers: 1,
+        });
+
+        const { Readable } = require('stream');
+        const readable = new Readable();
+        readable._read = () => {};
+        readable.push(buffer);
+        readable.push(null);
+
+        return readable;
+    } catch (error) {
+        console.error(`Telegram getFileStream Error for messageId ${messageId}:`, error);
+        throw error;
+    }
 };
