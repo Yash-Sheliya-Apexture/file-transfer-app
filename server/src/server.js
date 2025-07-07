@@ -983,24 +983,34 @@ connectDB();
 
 const app = express();
 
-const whitelist = [
-    'http://localhost:3000',
-    'https://file-transfer-app-one.vercel.app'
-].filter(Boolean);
+// =================== PERMANENT CORS SOLUTION START ===================
+
+// Define a default list of allowed origins.
+const defaultAllowedOrigins = 'http://localhost:3000,https://file-transfer-app-one.vercel.app';
+
+// Use the list from the .env file if it exists, otherwise use the default.
+const allowedOriginsEnv = process.env.ALLOWED_ORIGINS || defaultAllowedOrigins;
+const allowedOrigins = allowedOriginsEnv.split(',').map(origin => origin.trim()).filter(Boolean);
+
+console.log("Allowed CORS Origins:", allowedOrigins);
 
 const corsOptions = {
-    origin: function (origin, callback) {
-        if (!origin || whitelist.indexOf(origin) !== -1) {
+    origin: (origin, callback) => {
+        // Allow requests with no origin (like mobile apps or curl) or from the whitelist.
+        if (!origin || allowedOrigins.includes(origin)) {
             callback(null, true);
         } else {
-            console.error('CORS Error: Request from origin', origin, 'is not allowed.');
+            console.error(`CORS Error: Origin ${origin} is not allowed.`);
             callback(new Error('Not allowed by CORS'));
         }
     },
     credentials: true,
 };
 
+// Use the CORS middleware with our robust options.
 app.use(cors(corsOptions));
+
+// =================== PERMANENT CORS SOLUTION END =====================
 
 
 app.use('/api/auth', express.json(), authRoutes);
