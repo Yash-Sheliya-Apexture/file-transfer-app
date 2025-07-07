@@ -2914,14 +2914,15 @@ const File = require('../models/File');
 const gDriveService = require('../services/googleDrive.service');
 const telegramService = require('../services/telegram.service');
 const { PassThrough } = require('stream');
-const archiver = require('archiver');
+const archiver = 'archiver';
 const fs = require('fs');
 const path = require('path');
 
 const TEMP_UPLOAD_DIR = path.join(__dirname, '..', '..', 'tmp-uploads');
 fs.mkdirSync(TEMP_UPLOAD_DIR, { recursive: true });
 
-const TELEGRAM_CHUNK_SIZE = Math.floor(1.9 * 1024 * 1024 * 1024);
+// Using a smaller 15MB chunk size for increased reliability with large files
+const CHUNK_SIZE = 15 * 1024 * 1024;
 
 exports.uploadFile = async (req, res, next) => {
     let fileDoc;
@@ -2965,7 +2966,6 @@ async function transferGroupToTelegram(groupId) {
         try {
             await fileDoc.updateOne({ status: 'ARCHIVING' });
 
-            // 1. Download the file from Google Drive to a temporary local path
             console.log(`[GROUP ${groupId}] Downloading ${fileDoc.originalName} from Drive to temp storage...`);
             const gDriveStream = await gDriveService.getFileStream(fileDoc.gDriveFileId);
             const writer = fs.createWriteStream(tempFilePath);
@@ -2975,35 +2975,34 @@ async function transferGroupToTelegram(groupId) {
             const chunkData = [];
             let firstThumbnail = null;
 
-            // 2. Process the temporary file from disk
-            if (fileStats.size <= TELEGRAM_CHUNK_SIZE) {
+            if (fileStats.size <= CHUNK_SIZE) {
                 console.log(`[GROUP ${groupId}] File ${fileDoc.originalName} is small enough. Uploading as single part.`);
                 const { messageId, thumbnailBytes } = await telegramService.uploadFile(tempFilePath, fileDoc.originalName);
                 chunkData.push({ order: 0, messageId, size: fileStats.size });
                 if (thumbnailBytes) firstThumbnail = thumbnailBytes;
             } else {
-                console.log(`[GROUP ${groupId}] File ${fileDoc.originalName} is too large. Starting chunking process.`);
+                console.log(`[GROUP ${groupId}] File is large. Uploading in ${Math.ceil(fileStats.size / CHUNK_SIZE)} chunks of ~15MB.`);
                 let chunkIndex = 0;
-                for (let offset = 0; offset < fileStats.size; offset += TELEGRAM_CHUNK_SIZE) {
-                    const bytesToRead = Math.min(TELEGRAM_CHUNK_SIZE, fileStats.size - offset);
-                    const chunkFileName = `${fileDoc.originalName}.part${String(chunkIndex).padStart(3, '0')}`;
+                for (let offset = 0; offset < fileStats.size; offset += CHUNK_SIZE) {
+                    const chunkFileName = `${fileDoc.originalName}.part${String(chunkIndex).padStart(4, '0')}`;
                     const chunkFilePath = `${tempFilePath}.part${chunkIndex}`;
                     
-                    const readStream = fs.createReadStream(tempFilePath, { start: offset, end: offset + bytesToRead - 1 });
+                    const readStream = fs.createReadStream(tempFilePath, { start: offset, end: offset + CHUNK_SIZE - 1 });
                     const writeStream = fs.createWriteStream(chunkFilePath);
                     await new Promise((resolve, reject) => { readStream.pipe(writeStream); writeStream.on('finish', resolve); writeStream.on('error', reject); });
                     
+                    const chunkStats = await fs.promises.stat(chunkFilePath);
                     console.log(`[GROUP ${groupId}] Uploading chunk ${chunkIndex + 1}...`);
                     const { messageId, thumbnailBytes } = await telegramService.uploadFile(chunkFilePath, chunkFileName);
                     
                     await fs.promises.unlink(chunkFilePath);
+
                     if (chunkIndex === 0 && thumbnailBytes) firstThumbnail = thumbnailBytes;
-                    chunkData.push({ order: chunkIndex, messageId, size: bytesToRead });
+                    chunkData.push({ order: chunkIndex, messageId, size: chunkStats.size });
                     chunkIndex++;
                 }
             }
             
-            // 3. Update the database
             await fileDoc.updateOne({
                 telegramChunks: chunkData,
                 status: 'IN_TELEGRAM',
@@ -3016,14 +3015,12 @@ async function transferGroupToTelegram(groupId) {
             allTransfersSucceeded = false;
             break;
         } finally {
-            // 4. Clean up the main temporary file
             if (fs.existsSync(tempFilePath)) {
                 await fs.promises.unlink(tempFilePath);
             }
         }
     }
     
-    // 5. Clean up from Google Drive if all transfers were successful
     if (allTransfersSucceeded) {
         console.log(`[GROUP ${groupId}] All transfers successful. Cleaning up from Google Drive.`);
         const successfullyTransferredFiles = await File.find({ groupId, status: 'IN_TELEGRAM' });

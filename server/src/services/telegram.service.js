@@ -1014,42 +1014,62 @@ const { Buffer } = require('buffer');
 const apiId = parseInt(process.env.API_ID, 10);
 const apiHash = process.env.API_HASH;
 const session = process.env.SESSION_STRING;
-const storageChatId = parseInt(process.env.TELEGRAM_STORAGE_CHAT_ID, 10);
+// IMPORTANT: Your channel ID must be a number.
+// The -100 prefix is correct for channels, but it needs to be parsed as a number.
+const storageChatId = Number(process.env.TELEGRAM_STORAGE_CHAT_ID);
 
 if (!apiId || !apiHash || !session || !storageChatId) {
-    throw new Error("FATAL: Telegram MTProto credentials are not fully configured. Please check your .env file.");
+    throw new Error("FATAL: Telegram MTProto credentials are not fully configured. Please check API_ID, API_HASH, SESSION_STRING, and TELEGRAM_STORAGE_CHAT_ID in your .env file.");
 }
 
 let client = null;
+let connectionPromise = null;
 
-async function getClient() {
-    if (client === null) {
-        const stringSession = new StringSession(session);
-        client = new TelegramClient(stringSession, apiId, apiHash, {
-            connectionRetries: 5,
-        });
+/**
+ * Gets a single, connected instance of the Telegram client.
+ * This function prevents multiple concurrent connection attempts.
+ * @returns {Promise<TelegramClient>}
+ */
+function getClient() {
+    if (client && client.connected) {
+        return Promise.resolve(client);
     }
 
-    if (!client.connected) {
-        console.log("Telegram client is disconnected. Connecting...");
+    // If a connection attempt is already in progress, return the existing promise
+    if (connectionPromise) {
+        return connectionPromise;
+    }
+
+    // Start a new connection attempt
+    connectionPromise = (async () => {
         try {
+            console.log("Attempting to establish a new Telegram client connection...");
+            const stringSession = new StringSession(session);
+            client = new TelegramClient(stringSession, apiId, apiHash, {
+                connectionRetries: 5,
+            });
+
             await client.connect();
             console.log("Telegram client connected successfully.");
 
-            // =================== THE FIX IS HERE ===================
             // Force the client to load all chats/channels to populate its entity cache.
-            // This resolves the "Could not find the input entity" error.
             await client.getDialogs();
             console.log("Telegram dialogs loaded and entity cache is populated.");
-            // ===================== END OF FIX ======================
+            
+            // Clear the promise once connected
+            connectionPromise = null;
+            return client;
 
         } catch (error) {
             console.error("Failed to connect or initialize Telegram client:", error);
+            // Clear the promise and client on failure to allow for a clean retry
+            connectionPromise = null;
             client = null;
-            throw error;
+            throw error; // Re-throw the error to be caught by the caller
         }
-    }
-    return client;
+    })();
+
+    return connectionPromise;
 }
 
 exports.uploadFile = async (fileInput, originalFileName) => {
