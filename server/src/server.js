@@ -872,6 +872,7 @@ const app = express();
 
 const whitelist = [
     'http://localhost:3000',
+    'https://file-transfer-app-one.vercel.app',
     process.env.FRONTEND_URL,
 ].filter(Boolean);
 
