@@ -909,9 +909,107 @@
 // };
 
 
+// // server/src/services/telegram.service.js
+// const { TelegramClient } = require('telegram');
+// const { StringSession } = require('telegram/sessions');
+// const fs = require('fs');
+
+// const apiId = parseInt(process.env.API_ID, 10);
+// const apiHash = process.env.API_HASH;
+// const session = process.env.SESSION_STRING;
+// const storageChatId = parseInt(process.env.TELEGRAM_STORAGE_CHAT_ID, 10);
+
+// if (!apiId || !apiHash || !session || !storageChatId) {
+//     throw new Error("FATAL: Telegram MTProto credentials are not fully configured. Please check API_ID, API_HASH, SESSION_STRING, and TELEGRAM_STORAGE_CHAT_ID in your .env file.");
+// }
+
+// const stringSession = new StringSession(session);
+
+// const client = new TelegramClient(stringSession, apiId, apiHash, {
+//     connectionRetries: 5,
+// });
+
+// exports.initializeTelegramClient = async () => {
+//     console.log("Initializing Telegram MTProto client...");
+//     await client.connect();
+//     console.log("Telegram MTProto client connected successfully.");
+// };
+
+// /**
+//  * Uploads a file using the Telegram MTProto API.
+//  * @param {string} localFilePath - The path to the local file to upload.
+//  * @param {string} originalFileName - The name of the file.
+//  * @returns {object} An object containing the messageId and thumbnailBytes.
+//  */
+// exports.uploadFile = async (localFilePath, originalFileName) => {
+//     try {
+//         if (!client.connected) {
+//             console.warn("Telegram Upload: Client was disconnected. Reconnecting...");
+//             await client.connect();
+//         }
+        
+//         const fileResult = await client.sendFile(storageChatId, {
+//             file: localFilePath,
+//             caption: originalFileName,
+//             workers: 1,
+//         });
+
+//         // Extract the smallest thumbnail (type 'i') for a fast preview
+//         let thumbnailBytes = null;
+//         if (fileResult.media?.document?.thumbs) {
+//             const strippedThumb = fileResult.media.document.thumbs.find(thumb => thumb.className === 'PhotoStrippedSize');
+//             if (strippedThumb && strippedThumb.bytes) {
+//                 thumbnailBytes = strippedThumb.bytes;
+//             }
+//         }
+        
+//         return { messageId: fileResult.id, thumbnailBytes };
+
+//     } catch (error) {
+//         console.error(`Telegram Upload Error for ${originalFileName}:`, error);
+//         throw error;
+//     }
+// };
+
+// /**
+//  * Gets a file stream using the Telegram MTProto API.
+//  * @param {number} messageId - The message ID of the file.
+//  * @returns {ReadableStream} A readable stream of the file content.
+//  */
+// exports.getFileStream = async (messageId) => {
+//     try {
+//         if (!client.connected) {
+//             console.warn("Telegram client was disconnected. Reconnecting...");
+//             await client.connect();
+//         }
+
+//         const message = await client.getMessages(storageChatId, { ids: [messageId] });
+//         if (!message || message.length === 0 || !message[0].media) {
+//             throw new Error(`File with messageId ${messageId} not found or has no media.`);
+//         }
+
+//         const buffer = await client.downloadMedia(message[0], {
+//             workers: 1,
+//         });
+
+//         const { Readable } = require('stream');
+//         const readable = new Readable();
+//         readable._read = () => {};
+//         readable.push(buffer);
+//         readable.push(null);
+
+//         return readable;
+//     } catch (error) {
+//         console.error(`Telegram getFileStream Error for messageId ${messageId}:`, error);
+//         throw error;
+//     }
+// };
+
+
 const { TelegramClient } = require('telegram');
 const { StringSession } = require('telegram/sessions');
 const fs = require('fs');
+const { Buffer } = require('buffer');
 
 const apiId = parseInt(process.env.API_ID, 10);
 const apiHash = process.env.API_HASH;
@@ -919,41 +1017,54 @@ const session = process.env.SESSION_STRING;
 const storageChatId = parseInt(process.env.TELEGRAM_STORAGE_CHAT_ID, 10);
 
 if (!apiId || !apiHash || !session || !storageChatId) {
-    throw new Error("FATAL: Telegram MTProto credentials are not fully configured. Please check API_ID, API_HASH, SESSION_STRING, and TELEGRAM_STORAGE_CHAT_ID in your .env file.");
+    throw new Error("FATAL: Telegram MTProto credentials are not fully configured. Please check your .env file.");
 }
 
-const stringSession = new StringSession(session);
+let client = null;
 
-const client = new TelegramClient(stringSession, apiId, apiHash, {
-    connectionRetries: 5,
-});
+/**
+ * Gets a single, connected instance of the Telegram client.
+ * If the client is not initialized or disconnected, it will connect.
+ * @returns {Promise<TelegramClient>}
+ */
+async function getClient() {
+    if (client === null) {
+        const stringSession = new StringSession(session);
+        client = new TelegramClient(stringSession, apiId, apiHash, {
+            connectionRetries: 5,
+        });
+    }
 
-exports.initializeTelegramClient = async () => {
-    console.log("Initializing Telegram MTProto client...");
-    await client.connect();
-    console.log("Telegram MTProto client connected successfully.");
-};
+    if (!client.connected) {
+        console.log("Telegram client is disconnected. Connecting...");
+        try {
+            await client.connect();
+            console.log("Telegram client connected successfully.");
+        } catch (error) {
+            console.error("Failed to connect Telegram client:", error);
+            client = null;
+            throw error;
+        }
+    }
+    return client;
+}
 
 /**
  * Uploads a file using the Telegram MTProto API.
- * @param {string} localFilePath - The path to the local file to upload.
+ * @param {string | Buffer} fileInput - The path to the local file OR a Buffer containing the file data.
  * @param {string} originalFileName - The name of the file.
  * @returns {object} An object containing the messageId and thumbnailBytes.
  */
-exports.uploadFile = async (localFilePath, originalFileName) => {
+exports.uploadFile = async (fileInput, originalFileName) => {
     try {
-        if (!client.connected) {
-            console.warn("Telegram Upload: Client was disconnected. Reconnecting...");
-            await client.connect();
-        }
-        
-        const fileResult = await client.sendFile(storageChatId, {
-            file: localFilePath,
+        const tgClient = await getClient();
+
+        const fileResult = await tgClient.sendFile(storageChatId, {
+            file: fileInput,
             caption: originalFileName,
             workers: 1,
         });
 
-        // Extract the smallest thumbnail (type 'i') for a fast preview
         let thumbnailBytes = null;
         if (fileResult.media?.document?.thumbs) {
             const strippedThumb = fileResult.media.document.thumbs.find(thumb => thumb.className === 'PhotoStrippedSize');
@@ -961,9 +1072,7 @@ exports.uploadFile = async (localFilePath, originalFileName) => {
                 thumbnailBytes = strippedThumb.bytes;
             }
         }
-        
         return { messageId: fileResult.id, thumbnailBytes };
-
     } catch (error) {
         console.error(`Telegram Upload Error for ${originalFileName}:`, error);
         throw error;
@@ -977,29 +1086,24 @@ exports.uploadFile = async (localFilePath, originalFileName) => {
  */
 exports.getFileStream = async (messageId) => {
     try {
-        if (!client.connected) {
-            console.warn("Telegram client was disconnected. Reconnecting...");
-            await client.connect();
-        }
-
-        const message = await client.getMessages(storageChatId, { ids: [messageId] });
+        const tgClient = await getClient();
+        const message = await tgClient.getMessages(storageChatId, { ids: [messageId] });
         if (!message || message.length === 0 || !message[0].media) {
             throw new Error(`File with messageId ${messageId} not found or has no media.`);
         }
-
-        const buffer = await client.downloadMedia(message[0], {
+        const buffer = await tgClient.downloadMedia(message[0], {
             workers: 1,
         });
-
         const { Readable } = require('stream');
         const readable = new Readable();
         readable._read = () => {};
         readable.push(buffer);
         readable.push(null);
-
         return readable;
     } catch (error) {
         console.error(`Telegram getFileStream Error for messageId ${messageId}:`, error);
         throw error;
     }
 };
+
+exports.initializeTelegramClient = getClient;

@@ -747,7 +747,110 @@
 //     console.log('ARCHIVAL JANITOR: Job finished.');
 // }
 
-// server/src/server.js
+// // server/src/server.js
+// const path = require('path');
+// require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
+// const express = require('express');
+// const cors = require('cors');
+// const connectDB = require('./utils/database');
+// const http = require('http'); // 1. Import the 'http' module
+
+// const authRoutes = require('./routes/auth.routes');
+// const userRoutes = require('./routes/user.routes');
+// const fileRoutes = require('./routes/file.routes');
+// const errorMiddleware = require('./middleware/error.middleware');
+// const File = require('./models/File');
+// const { transferGroupToTelegram } = require('./controllers/file.controller');
+
+// connectDB();
+
+// const app = express();
+
+// const whitelist = [
+//     'http://localhost:3000',
+//     process.env.FRONTEND_URL,
+// ].filter(Boolean);
+
+// const corsOptions = {
+//     origin: function (origin, callback) {
+//         if (!origin || whitelist.indexOf(origin) !== -1) {
+//             callback(null, true);
+//         } else {
+//             console.error('CORS Error: Request from origin', origin, 'is not allowed.');
+//             callback(new Error('Not allowed by CORS'));
+//         }
+//     },
+//     credentials: true,
+// };
+
+// app.use(cors(corsOptions));
+
+// app.use('/api/auth', express.json(), authRoutes);
+// app.use('/api/users', express.json(), userRoutes);
+// app.use('/api/files', fileRoutes);
+
+// app.use(errorMiddleware);
+
+// const PORT = process.env.PORT || 5000;
+
+// // 2. Create an HTTP server from the Express app
+// const server = http.createServer(app);
+
+// // 3. Set a long timeout for the server
+// const TWO_HOURS_IN_MS = 2 * 60 * 60 * 1000;
+// server.setTimeout(TWO_HOURS_IN_MS);
+
+// // 4. Use server.listen() instead of app.listen()
+// server.listen(PORT, () => {
+//     console.log(`Server running on port ${PORT} with a ${TWO_HOURS_IN_MS / 1000 / 60} minute timeout.`);
+
+//     const ARCHIVE_INTERVAL_MS = 5 * 60 * 1000;
+//     console.log(`Starting archival janitor. Will run every ${ARCHIVE_INTERVAL_MS / 1000 / 60} minutes.`);
+    
+//     setInterval(runArchivalProcess, ARCHIVE_INTERVAL_MS);
+//     setTimeout(runArchivalProcess, 10000);
+// });
+
+
+// async function runArchivalProcess() {
+//     console.log('ARCHIVAL JANITOR: Running job...');
+//     const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+
+//     try {
+//         const archivableGroups = await File.aggregate([
+//             { $match: { status: 'IN_DRIVE', driveUploadTimestamp: { $ne: null } } },
+//             {
+//                 $group: {
+//                     _id: '$groupId',
+//                     countInDrive: { $sum: 1 },
+//                     groupTotal: { $first: '$groupTotal' },
+//                     lastUploadTime: { $max: '$driveUploadTimestamp' }
+//                 }
+//             },
+//             {
+//                 $match: {
+//                     $expr: { $eq: ['$countInDrive', '$groupTotal'] },
+//                     lastUploadTime: { $lte: fiveMinutesAgo }
+//                 }
+//             }
+//         ]);
+
+//         if (archivableGroups.length === 0) {
+//             console.log('ARCHIVAL JANITOR: No complete groups are old enough to archive.');
+//             return;
+//         }
+
+//         console.log(`ARCHIVAL JANITOR: Found ${archivableGroups.length} group(s) to process.`);
+//         for (const group of archivableGroups) {
+//             await transferGroupToTelegram(group._id);
+//         }
+
+//     } catch (error) {
+//         console.error('ARCHIVAL JANITOR: Error during group identification:', error);
+//     }
+//     console.log('ARCHIVAL JANITOR: Job finished.');
+// }
+
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 const express = require('express');
@@ -761,6 +864,7 @@ const fileRoutes = require('./routes/file.routes');
 const errorMiddleware = require('./middleware/error.middleware');
 const File = require('./models/File');
 const { transferGroupToTelegram } = require('./controllers/file.controller');
+const { initializeTelegramClient } = require('./services/telegram.service'); // Import the initializer
 
 connectDB();
 
@@ -800,15 +904,22 @@ const server = http.createServer(app);
 const TWO_HOURS_IN_MS = 2 * 60 * 60 * 1000;
 server.setTimeout(TWO_HOURS_IN_MS);
 
-// 4. Use server.listen() instead of app.listen()
-server.listen(PORT, () => {
+// 4. Use server.listen() and make the callback async to handle the client initialization
+server.listen(PORT, async () => {
     console.log(`Server running on port ${PORT} with a ${TWO_HOURS_IN_MS / 1000 / 60} minute timeout.`);
+
+    // "Warm up" the singleton Telegram connection on startup
+    try {
+        await initializeTelegramClient();
+    } catch (error) {
+        console.error("Could not initialize Telegram client on startup. Will retry on first use.", error.message);
+    }
 
     const ARCHIVE_INTERVAL_MS = 5 * 60 * 1000;
     console.log(`Starting archival janitor. Will run every ${ARCHIVE_INTERVAL_MS / 1000 / 60} minutes.`);
     
     setInterval(runArchivalProcess, ARCHIVE_INTERVAL_MS);
-    setTimeout(runArchivalProcess, 10000);
+    setTimeout(runArchivalProcess, 10000); // Also run shortly after startup
 });
 
 
@@ -842,7 +953,9 @@ async function runArchivalProcess() {
 
         console.log(`ARCHIVAL JANITOR: Found ${archivableGroups.length} group(s) to process.`);
         for (const group of archivableGroups) {
-            await transferGroupToTelegram(group._id);
+            // Do not await here to allow multiple groups to process in parallel if needed
+            // The transfer function itself is async and will run independently.
+            transferGroupToTelegram(group._id);
         }
 
     } catch (error) {

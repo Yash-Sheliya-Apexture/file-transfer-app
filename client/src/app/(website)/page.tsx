@@ -745,7 +745,7 @@
 //   );
 // }
 
-
+// client/src/app/(website)/page.tsx
 "use client";
 
 import { useState } from 'react';
