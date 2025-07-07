@@ -1022,11 +1022,6 @@ if (!apiId || !apiHash || !session || !storageChatId) {
 
 let client = null;
 
-/**
- * Gets a single, connected instance of the Telegram client.
- * If the client is not initialized or disconnected, it will connect.
- * @returns {Promise<TelegramClient>}
- */
 async function getClient() {
     if (client === null) {
         const stringSession = new StringSession(session);
@@ -1040,8 +1035,16 @@ async function getClient() {
         try {
             await client.connect();
             console.log("Telegram client connected successfully.");
+
+            // =================== THE FIX IS HERE ===================
+            // Force the client to load all chats/channels to populate its entity cache.
+            // This resolves the "Could not find the input entity" error.
+            await client.getDialogs();
+            console.log("Telegram dialogs loaded and entity cache is populated.");
+            // ===================== END OF FIX ======================
+
         } catch (error) {
-            console.error("Failed to connect Telegram client:", error);
+            console.error("Failed to connect or initialize Telegram client:", error);
             client = null;
             throw error;
         }
@@ -1049,16 +1052,9 @@ async function getClient() {
     return client;
 }
 
-/**
- * Uploads a file using the Telegram MTProto API.
- * @param {string | Buffer} fileInput - The path to the local file OR a Buffer containing the file data.
- * @param {string} originalFileName - The name of the file.
- * @returns {object} An object containing the messageId and thumbnailBytes.
- */
 exports.uploadFile = async (fileInput, originalFileName) => {
     try {
         const tgClient = await getClient();
-
         const fileResult = await tgClient.sendFile(storageChatId, {
             file: fileInput,
             caption: originalFileName,
@@ -1079,11 +1075,6 @@ exports.uploadFile = async (fileInput, originalFileName) => {
     }
 };
 
-/**
- * Gets a file stream using the Telegram MTProto API.
- * @param {number} messageId - The message ID of the file.
- * @returns {ReadableStream} A readable stream of the file content.
- */
 exports.getFileStream = async (messageId) => {
     try {
         const tgClient = await getClient();
