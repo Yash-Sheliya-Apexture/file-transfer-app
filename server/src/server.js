@@ -964,6 +964,129 @@
 //     console.log('ARCHIVAL JANITOR: Job finished.');
 // }
 
+
+
+// // server/src/server.js
+// const path = require('path');
+// require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
+// const express = require('express');
+// const cors = require('cors');
+// const connectDB = require('./utils/database');
+// const http = require('http');
+
+// const authRoutes = require('./routes/auth.routes');
+// const userRoutes = require('./routes/user.routes');
+// const fileRoutes = require('./routes/file.routes');
+// const errorMiddleware = require('./middleware/error.middleware');
+// const File = require('./models/File');
+// const { transferGroupToTelegram } = require('./controllers/file.controller');
+// const { initializeTelegramClient } = require('./services/telegram.service');
+
+// connectDB();
+
+// const app = express();
+
+// // =================== PERMANENT CORS SOLUTION START ===================
+
+// // Define a default list of allowed origins.
+// const defaultAllowedOrigins = 'http://localhost:3000,https://file-transfer-app-one.vercel.app';
+
+// // Use the list from the .env file if it exists, otherwise use the default.
+// const allowedOriginsEnv = process.env.ALLOWED_ORIGINS || defaultAllowedOrigins;
+// const allowedOrigins = allowedOriginsEnv.split(',').map(origin => origin.trim()).filter(Boolean);
+
+// console.log("Allowed CORS Origins:", allowedOrigins);
+
+// const corsOptions = {
+//     origin: (origin, callback) => {
+//         // Allow requests with no origin (like mobile apps or curl) or from the whitelist.
+//         if (!origin || allowedOrigins.includes(origin)) {
+//             callback(null, true);
+//         } else {
+//             console.error(`CORS Error: Origin ${origin} is not allowed.`);
+//             callback(new Error('Not allowed by CORS'));
+//         }
+//     },
+//     credentials: true,
+// };
+
+// // Use the CORS middleware with our robust options.
+// app.use(cors(corsOptions));
+
+// // =================== PERMANENT CORS SOLUTION END =====================
+
+
+// app.use('/api/auth', express.json(), authRoutes);
+// app.use('/api/users', express.json(), userRoutes);
+// app.use('/api/files', fileRoutes);
+
+// app.use(errorMiddleware);
+
+// const PORT = process.env.PORT || 5000;
+
+// const server = http.createServer(app);
+
+// const TWO_HOURS_IN_MS = 2 * 60 * 60 * 1000;
+// server.setTimeout(TWO_HOURS_IN_MS);
+
+// server.listen(PORT, async () => {
+//     console.log(`Server running on port ${PORT} with a 120 minute timeout.`);
+
+//     try {
+//         await initializeTelegramClient();
+//     } catch (error) {
+//         console.error("Could not initialize Telegram client on startup. Will retry on first use.", error.message);
+//     }
+    
+//     const ARCHIVE_INTERVAL_MS = 5 * 60 * 1000;
+//     console.log(`Starting archival janitor. Will run every ${ARCHIVE_INTERVAL_MS / 1000 / 60} minutes.`);
+    
+//     setInterval(runArchivalProcess, ARCHIVE_INTERVAL_MS);
+//     setTimeout(runArchivalProcess, 10000);
+// });
+
+
+// async function runArchivalProcess() {
+//     console.log('ARCHIVAL JANITOR: Running job...');
+//     const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+
+//     try {
+//         const archivableGroups = await File.aggregate([
+//             { $match: { status: 'IN_DRIVE', driveUploadTimestamp: { $ne: null } } },
+//             {
+//                 $group: {
+//                     _id: '$groupId',
+//                     countInDrive: { $sum: 1 },
+//                     groupTotal: { $first: '$groupTotal' },
+//                     lastUploadTime: { $max: '$driveUploadTimestamp' }
+//                 }
+//             },
+//             {
+//                 $match: {
+//                     $expr: { $eq: ['$countInDrive', '$groupTotal'] },
+//                     lastUploadTime: { $lte: fiveMinutesAgo }
+//                 }
+//             }
+//         ]);
+
+//         if (archivableGroups.length === 0) {
+//             console.log('ARCHIVAL JANITOR: No complete groups are old enough to archive.');
+//             return;
+//         }
+
+//         console.log(`ARCHIVAL JANITOR: Found ${archivableGroups.length} group(s) to process.`);
+//         for (const group of archivableGroups) {
+//             transferGroupToTelegram(group._id);
+//         }
+
+//     } catch (error) {
+//         console.error('ARCHIVAL JANITOR: Error during group identification:', error);
+//     }
+//     console.log('ARCHIVAL JANITOR: Job finished.');
+// }
+
+
+// server/src/server.js
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 const express = require('express');
@@ -977,26 +1100,17 @@ const fileRoutes = require('./routes/file.routes');
 const errorMiddleware = require('./middleware/error.middleware');
 const File = require('./models/File');
 const { transferGroupToTelegram } = require('./controllers/file.controller');
-const { initializeTelegramClient } = require('./services/telegram.service');
 
 connectDB();
 
 const app = express();
 
-// =================== PERMANENT CORS SOLUTION START ===================
-
-// Define a default list of allowed origins.
 const defaultAllowedOrigins = 'http://localhost:3000,https://file-transfer-app-one.vercel.app';
-
-// Use the list from the .env file if it exists, otherwise use the default.
 const allowedOriginsEnv = process.env.ALLOWED_ORIGINS || defaultAllowedOrigins;
 const allowedOrigins = allowedOriginsEnv.split(',').map(origin => origin.trim()).filter(Boolean);
-
 console.log("Allowed CORS Origins:", allowedOrigins);
-
 const corsOptions = {
     origin: (origin, callback) => {
-        // Allow requests with no origin (like mobile apps or curl) or from the whitelist.
         if (!origin || allowedOrigins.includes(origin)) {
             callback(null, true);
         } else {
@@ -1006,42 +1120,25 @@ const corsOptions = {
     },
     credentials: true,
 };
-
-// Use the CORS middleware with our robust options.
 app.use(cors(corsOptions));
-
-// =================== PERMANENT CORS SOLUTION END =====================
-
 
 app.use('/api/auth', express.json(), authRoutes);
 app.use('/api/users', express.json(), userRoutes);
 app.use('/api/files', fileRoutes);
-
 app.use(errorMiddleware);
 
 const PORT = process.env.PORT || 5000;
-
 const server = http.createServer(app);
-
 const TWO_HOURS_IN_MS = 2 * 60 * 60 * 1000;
 server.setTimeout(TWO_HOURS_IN_MS);
 
 server.listen(PORT, async () => {
     console.log(`Server running on port ${PORT} with a 120 minute timeout.`);
-
-    try {
-        await initializeTelegramClient();
-    } catch (error) {
-        console.error("Could not initialize Telegram client on startup. Will retry on first use.", error.message);
-    }
-    
     const ARCHIVE_INTERVAL_MS = 5 * 60 * 1000;
     console.log(`Starting archival janitor. Will run every ${ARCHIVE_INTERVAL_MS / 1000 / 60} minutes.`);
-    
     setInterval(runArchivalProcess, ARCHIVE_INTERVAL_MS);
     setTimeout(runArchivalProcess, 10000);
 });
-
 
 async function runArchivalProcess() {
     console.log('ARCHIVAL JANITOR: Running job...');
@@ -1049,7 +1146,14 @@ async function runArchivalProcess() {
 
     try {
         const archivableGroups = await File.aggregate([
-            { $match: { status: 'IN_DRIVE', driveUploadTimestamp: { $ne: null } } },
+            { 
+                $match: { 
+                    status: 'IN_DRIVE', 
+                    driveUploadTimestamp: { $ne: null },
+                    // <-- MODIFIED: Prevents groups that have failed 3+ times from being retried.
+                    archiveAttempts: { $lt: 3 } 
+                } 
+            },
             {
                 $group: {
                     _id: '$groupId',
@@ -1073,6 +1177,7 @@ async function runArchivalProcess() {
 
         console.log(`ARCHIVAL JANITOR: Found ${archivableGroups.length} group(s) to process.`);
         for (const group of archivableGroups) {
+            // This function is now responsible for incrementing the attempt counter.
             transferGroupToTelegram(group._id);
         }
 

@@ -1182,7 +1182,166 @@
 
 
 
-// client/src/app/download/[groupId]/page.tsx
+// // client/src/app/download/[groupId]/page.tsx
+// "use client";
+
+// import { useEffect, useState } from 'react';
+// import { Button } from "@/components/ui/button";
+// import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+// import { formatBytes } from "@/utils/format";
+// import { Download, File as FileIcon, Loader2, Package, AlertTriangle } from "lucide-react";
+// import { toast } from "sonner";
+// import { usePathname } from 'next/navigation';
+
+// // --- MODIFIED INTERFACE ---
+// interface FileMetadata {
+//     originalName: string;
+//     size: number;
+//     uniqueId: string;
+//     thumbnail: string | null; // Can be a base64 string
+// }
+
+// export default function DownloadGroupPage() {
+//     const pathname = usePathname();
+//     const groupId = pathname.split('/').pop();
+
+//     const [files, setFiles] = useState<FileMetadata[]>([]);
+//     const [isLoading, setIsLoading] = useState(true);
+//     const [error, setError] = useState<string | null>(null);
+//     const [downloading, setDownloading] = useState<Set<string>>(new Set());
+//     const [isDownloadingAll, setIsDownloadingAll] = useState(false);
+
+//     useEffect(() => {
+//         if (!groupId) {
+//             setError("No Group ID provided in the URL.");
+//             setIsLoading(false);
+//             return;
+//         }
+
+//         const fetchGroupMetadata = async () => {
+//             const apiUrl = `/api/files/group-meta/${groupId}`;
+//             try {
+//                 const res = await fetch(apiUrl);
+//                 if (!res.ok) {
+//                     const errorData = await res.json().catch(() => ({ message: "File group not found or the link has expired." }));
+//                     throw new Error(errorData.message);
+//                 }
+//                 const data: FileMetadata[] = await res.json();
+//                 if (data.length === 0) {
+//                     throw new Error("This link is valid, but contains no files.");
+//                 }
+//                 setFiles(data);
+//             } catch (err) {
+//                 const error = err as Error;
+//                 setError(error.message);
+//             } finally {
+//                 setIsLoading(false);
+//             }
+//         };
+
+//         fetchGroupMetadata();
+//     }, [groupId]);
+
+//     const handleDownload = async (file: FileMetadata) => {
+//         if (downloading.has(file.uniqueId)) return;
+//         setDownloading(prev => new Set(prev).add(file.uniqueId));
+//         toast.info(`Preparing to download ${file.originalName}...`);
+//         try {
+//             const downloadProxyUrl = `/api/download-proxy/${file.uniqueId}`;
+//             const response = await fetch(downloadProxyUrl);
+//             if (!response.ok) {
+//                 const errorText = await response.text();
+//                 throw new Error(errorText || `Server error: ${response.statusText}`);
+//             }
+//             const blob = await response.blob();
+//             const url = window.URL.createObjectURL(blob);
+//             const link = document.createElement('a');
+//             link.href = url;
+//             link.setAttribute('download', file.originalName);
+//             document.body.appendChild(link);
+//             link.click();
+//             document.body.removeChild(link);
+//             window.URL.revokeObjectURL(url);
+//             toast.success(`${file.originalName} has started downloading.`);
+//         } catch (err) {
+//             const error = err as Error;
+//             console.error("Download error:", error);
+//             toast.error(`Failed to download ${file.originalName}`, { description: error.message });
+//         } finally {
+//             setDownloading(prev => { const newSet = new Set(prev); newSet.delete(file.uniqueId); return newSet; });
+//         }
+//     };
+    
+//     const handleDownloadAll = () => {
+//         if (files.length === 0 || isDownloadingAll) return;
+//         setIsDownloadingAll(true);
+//         toast.info(`Starting batch download for ${files.length} files.`, { description: "Please allow pop-ups if prompted by your browser." });
+//         const delayBetweenDownloads = 500;
+//         let downloadCount = 0;
+//         files.forEach((file, index) => {
+//             setTimeout(() => {
+//                 handleDownload(file).finally(() => {
+//                     downloadCount++;
+//                     if (downloadCount === files.length) {
+//                         setIsDownloadingAll(false);
+//                         toast.success("All file downloads have been initiated.");
+//                     }
+//                 });
+//             }, index * delayBetweenDownloads);
+//         });
+//     };
+
+//     if (isLoading) { return <div className="flex min-h-screen items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>; }
+
+//     if (error || files.length === 0) { return <div className="flex min-h-screen items-center justify-center p-4"><Card className="w-full max-w-md text-center"><CardHeader><div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-red-100"><AlertTriangle className="h-6 w-6 text-red-600" /></div><CardTitle className="mt-4 text-destructive">Download Unavailable</CardTitle><CardDescription>{error || "This link is invalid or has expired."}</CardDescription></CardHeader></Card></div>; }
+
+//     const totalSize = files.reduce((acc, file) => acc + file.size, 0);
+
+//     return (
+//         <div className="flex min-h-screen items-center justify-center bg-gray-50 dark:bg-gray-900 p-4">
+//             <Card className="w-full max-w-lg">
+//                 <CardHeader>
+//                     <CardTitle className="flex items-center gap-2 text-2xl"><Package size={28} /> File Batch Ready</CardTitle>
+//                     <CardDescription>This link contains {files.length} file(s) with a total size of {formatBytes(totalSize)}.</CardDescription>
+//                 </CardHeader>
+//                 <CardContent className="space-y-4">
+//                     <div className="space-y-2 max-h-72 overflow-y-auto rounded-md border p-2">
+//                         {files.map(file => (
+//                             <div key={file.uniqueId} className="flex items-center justify-between p-2 hover:bg-muted/50 rounded-md transition-colors">
+//                                 <div className="flex items-center gap-3 overflow-hidden">
+//                                     {/* --- NEW: Display thumbnail if it exists, otherwise show a file icon --- */}
+//                                     {file.thumbnail ? (
+//                                         <img
+//                                             src={`data:image/jpeg;base64,${file.thumbnail}`}
+//                                             alt="preview"
+//                                             className="h-10 w-10 flex-shrink-0 rounded-sm object-cover bg-gray-200"
+//                                         />
+//                                     ) : (
+//                                         <div className="h-10 w-10 flex-shrink-0 rounded-sm bg-gray-100 flex items-center justify-center">
+//                                             <FileIcon className="h-5 w-5 text-gray-500" />
+//                                         </div>
+//                                     )}
+//                                     <div className='overflow-hidden'>
+//                                         <p className="font-medium text-sm truncate" title={file.originalName}>{file.originalName}</p>
+//                                         <p className="text-xs text-muted-foreground">{formatBytes(file.size)}</p>
+//                                     </div>
+//                                 </div>
+//                                 <Button size="sm" variant="ghost" onClick={() => handleDownload(file)} disabled={downloading.has(file.uniqueId)}>
+//                                     {downloading.has(file.uniqueId) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+//                                 </Button>
+//                             </div>
+//                         ))}
+//                     </div>
+//                     <Button className="w-full h-12 text-md" onClick={handleDownloadAll} disabled={isDownloadingAll}>
+//                         {isDownloadingAll ? (<Loader2 className="mr-2 h-5 w-5 animate-spin" />) : (<Download className="mr-2 h-5 w-5" />)}
+//                         {isDownloadingAll ? 'Initiating Downloads...' : 'Download All'}
+//                     </Button>
+//                 </CardContent>
+//             </Card>
+//         </div>
+//     );
+// }
+
 "use client";
 
 import { useEffect, useState } from 'react';
@@ -1193,12 +1352,11 @@ import { Download, File as FileIcon, Loader2, Package, AlertTriangle } from "luc
 import { toast } from "sonner";
 import { usePathname } from 'next/navigation';
 
-// --- MODIFIED INTERFACE ---
 interface FileMetadata {
     originalName: string;
     size: number;
     uniqueId: string;
-    thumbnail: string | null; // Can be a base64 string
+    thumbnail: string | null;
 }
 
 export default function DownloadGroupPage() {
@@ -1219,6 +1377,7 @@ export default function DownloadGroupPage() {
         }
 
         const fetchGroupMetadata = async () => {
+            setIsLoading(true);
             const apiUrl = `/api/files/group-meta/${groupId}`;
             try {
                 const res = await fetch(apiUrl);
@@ -1272,71 +1431,103 @@ export default function DownloadGroupPage() {
         }
     };
     
-    const handleDownloadAll = () => {
-        if (files.length === 0 || isDownloadingAll) return;
+    const handleDownloadAll = async () => {
+        if (files.length === 0 || isDownloadingAll || !groupId) return;
         setIsDownloadingAll(true);
-        toast.info(`Starting batch download for ${files.length} files.`, { description: "Please allow pop-ups if prompted by your browser." });
-        const delayBetweenDownloads = 500;
-        let downloadCount = 0;
-        files.forEach((file, index) => {
-            setTimeout(() => {
-                handleDownload(file).finally(() => {
-                    downloadCount++;
-                    if (downloadCount === files.length) {
-                        setIsDownloadingAll(false);
-                        toast.success("All file downloads have been initiated.");
-                    }
-                });
-            }, index * delayBetweenDownloads);
-        });
+        toast.info("Preparing your ZIP file, this may take a moment...");
+        try {
+            const downloadProxyUrl = `/api/download-proxy/zip/${groupId}`;
+            const response = await fetch(downloadProxyUrl);
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(errorText || `Server error: ${response.statusText}`);
+            }
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            const zipFileName = files[0].originalName.split('.')[0] || 'archive';
+            link.setAttribute('download', `${zipFileName}.zip`);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            window.URL.revokeObjectURL(url);
+            toast.success("Your ZIP download has started!");
+        } catch (err) {
+            const error = err as Error;
+            console.error("Download All error:", error);
+            toast.error(`Failed to download ZIP file`, { description: error.message });
+        } finally {
+            setIsDownloadingAll(false);
+        }
     };
 
-    if (isLoading) { return <div className="flex min-h-screen items-center justify-center"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>; }
-
-    if (error || files.length === 0) { return <div className="flex min-h-screen items-center justify-center p-4"><Card className="w-full max-w-md text-center"><CardHeader><div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-red-100"><AlertTriangle className="h-6 w-6 text-red-600" /></div><CardTitle className="mt-4 text-destructive">Download Unavailable</CardTitle><CardDescription>{error || "This link is invalid or has expired."}</CardDescription></CardHeader></Card></div>; }
-
-    const totalSize = files.reduce((acc, file) => acc + file.size, 0);
-
+    // <-- REVISED RENDER LOGIC -->
     return (
         <div className="flex min-h-screen items-center justify-center bg-gray-50 dark:bg-gray-900 p-4">
             <Card className="w-full max-w-lg">
-                <CardHeader>
-                    <CardTitle className="flex items-center gap-2 text-2xl"><Package size={28} /> File Batch Ready</CardTitle>
-                    <CardDescription>This link contains {files.length} file(s) with a total size of {formatBytes(totalSize)}.</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                    <div className="space-y-2 max-h-72 overflow-y-auto rounded-md border p-2">
-                        {files.map(file => (
-                            <div key={file.uniqueId} className="flex items-center justify-between p-2 hover:bg-muted/50 rounded-md transition-colors">
-                                <div className="flex items-center gap-3 overflow-hidden">
-                                    {/* --- NEW: Display thumbnail if it exists, otherwise show a file icon --- */}
-                                    {file.thumbnail ? (
-                                        <img
-                                            src={`data:image/jpeg;base64,${file.thumbnail}`}
-                                            alt="preview"
-                                            className="h-10 w-10 flex-shrink-0 rounded-sm object-cover bg-gray-200"
-                                        />
-                                    ) : (
-                                        <div className="h-10 w-10 flex-shrink-0 rounded-sm bg-gray-100 flex items-center justify-center">
-                                            <FileIcon className="h-5 w-5 text-gray-500" />
-                                        </div>
-                                    )}
-                                    <div className='overflow-hidden'>
-                                        <p className="font-medium text-sm truncate" title={file.originalName}>{file.originalName}</p>
-                                        <p className="text-xs text-muted-foreground">{formatBytes(file.size)}</p>
-                                    </div>
+                {error ? (
+                    // State: An error occurred
+                    <CardHeader>
+                        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-red-100">
+                            <AlertTriangle className="h-6 w-6 text-red-600" />
+                        </div>
+                        <CardTitle className="mt-4 text-center text-destructive">Download Unavailable</CardTitle>
+                        <CardDescription className="text-center">{error}</CardDescription>
+                    </CardHeader>
+                ) : (
+                    // State: Loading or Success
+                    <>
+                        <CardHeader>
+                            <CardTitle className="flex items-center gap-2 text-2xl">
+                                <Package size={28} /> File Batch Ready
+                            </CardTitle>
+                            {isLoading ? (
+                                <CardDescription>Fetching file details...</CardDescription>
+                            ) : (
+                                <CardDescription>
+                                    This link contains {files.length} file(s) with a total size of {formatBytes(files.reduce((acc, file) => acc + file.size, 0))}.
+                                </CardDescription>
+                            )}
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                            {isLoading ? (
+                                <div className="flex justify-center items-center h-48">
+                                    <Loader2 className="h-8 w-8 animate-spin text-primary" />
                                 </div>
-                                <Button size="sm" variant="ghost" onClick={() => handleDownload(file)} disabled={downloading.has(file.uniqueId)}>
-                                    {downloading.has(file.uniqueId) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                                </Button>
-                            </div>
-                        ))}
-                    </div>
-                    <Button className="w-full h-12 text-md" onClick={handleDownloadAll} disabled={isDownloadingAll}>
-                        {isDownloadingAll ? (<Loader2 className="mr-2 h-5 w-5 animate-spin" />) : (<Download className="mr-2 h-5 w-5" />)}
-                        {isDownloadingAll ? 'Initiating Downloads...' : 'Download All'}
-                    </Button>
-                </CardContent>
+                            ) : (
+                                <>
+                                    <div className="space-y-2 max-h-72 overflow-y-auto rounded-md border p-2">
+                                        {files.map(file => (
+                                            <div key={file.uniqueId} className="flex items-center justify-between p-2 hover:bg-muted/50 rounded-md transition-colors">
+                                                <div className="flex items-center gap-3 overflow-hidden">
+                                                    {file.thumbnail ? (
+                                                        <img src={`data:image/jpeg;base64,${file.thumbnail}`} alt="preview" className="h-10 w-10 flex-shrink-0 rounded-sm object-cover bg-gray-200" />
+                                                    ) : (
+                                                        <div className="h-10 w-10 flex-shrink-0 rounded-sm bg-gray-100 flex items-center justify-center">
+                                                            <FileIcon className="h-5 w-5 text-gray-500" />
+                                                        </div>
+                                                    )}
+                                                    <div className='overflow-hidden'>
+                                                        <p className="font-medium text-sm truncate" title={file.originalName}>{file.originalName}</p>
+                                                        <p className="text-xs text-muted-foreground">{formatBytes(file.size)}</p>
+                                                    </div>
+                                                </div>
+                                                <Button size="sm" variant="ghost" onClick={() => handleDownload(file)} disabled={downloading.has(file.uniqueId)}>
+                                                    {downloading.has(file.uniqueId) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                                                </Button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <Button className="w-full h-12 text-md" onClick={handleDownloadAll} disabled={isDownloadingAll}>
+                                        {isDownloadingAll ? (<Loader2 className="mr-2 h-5 w-5 animate-spin" />) : (<Package className="mr-2 h-5 w-5" />)}
+                                        {isDownloadingAll ? 'Zipping files...' : 'Download All as .ZIP'}
+                                    </Button>
+                                </>
+                            )}
+                        </CardContent>
+                    </>
+                )}
             </Card>
         </div>
     );

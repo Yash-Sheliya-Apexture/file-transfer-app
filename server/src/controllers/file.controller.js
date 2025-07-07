@@ -3170,7 +3170,7 @@
 //     } catch (error) { next(error); }
 // };
 
-
+// server/src/controllers/file.controller.js
 const File = require('../models/File');
 const gDriveService = require('../services/googleDrive.service');
 const telegramService = require('../services/telegram.service');
@@ -3178,113 +3178,207 @@ const { PassThrough } = require('stream');
 const archiver = require('archiver');
 const fs = require('fs');
 const path = require('path');
+// <-- NEW: Import for sanitizing filenames.
+const sanitize = require("sanitize-filename");
 
 const TEMP_UPLOAD_DIR = path.join(__dirname, '..', '..', 'tmp-uploads');
 fs.mkdirSync(TEMP_UPLOAD_DIR, { recursive: true });
 
-// Set the chunk size to 18MB for uploads
 const CHUNK_SIZE = 18 * 1024 * 1024;
 
-exports.uploadFile = async (req, res, next) => {
-    let fileDoc;
+// This function is now very simple: just get the URL from the service and return it.
+exports.initiateUpload = async (req, res, next) => {
     try {
-        const fileName = decodeURIComponent(req.headers['x-file-name']);
-        const fileSize = parseInt(req.headers['content-length'], 10);
-        const groupId = req.headers['x-group-id'];
-        const groupTotal = parseInt(req.headers['x-group-total'], 10);
-        if (!fileName || !fileSize || !groupId || !groupTotal) {
-            return res.status(400).json({ message: 'Missing required file metadata headers.' });
+        const { fileName, mimeType, fileSize } = req.body;
+        // --- THE CRITICAL FIX (Part 1): Get the client's origin from the request headers ---
+        const origin = req.headers.origin;
+
+        if (!fileName || !mimeType || fileSize === undefined) {
+            return res.status(400).json({ message: 'fileName, mimeType, and fileSize are required.' });
         }
-        fileDoc = new File({ originalName: fileName, size: fileSize, owner: req.user ? req.user._id : null, groupId, groupTotal });
+        if (!origin) {
+            return res.status(400).json({ message: 'Request must have an Origin header.' });
+        }
+        
+        // --- Pass the origin to the service function ---
+        const { uploadUrl } = await gDriveService.initiateResumableUpload(fileName, mimeType, fileSize, origin);
+        
+        res.json({ uploadUrl });
+
+    } catch (error) {
+        console.error("Controller Error in initiateUpload:", error.message);
+        next(error); 
+    }
+};
+
+// This is the final confirmation step, where the database record is created.
+exports.uploadFile = async (req, res, next) => {
+    try {
+        const { originalName, size, gDriveFileId, groupId, groupTotal } = req.body;
+        if (!originalName || !size || !gDriveFileId || !groupId || !groupTotal) {
+            return res.status(400).json({ message: 'Missing required file metadata for confirmation.' });
+        }
+        
+        const fileDoc = new File({
+            originalName,
+            size,
+            gDriveFileId,
+            groupId,
+            groupTotal,
+            owner: req.user ? req.user._id : null,
+            status: 'IN_DRIVE', // The upload is complete, so it's IN_DRIVE
+            driveUploadTimestamp: new Date(),
+        });
         await fileDoc.save();
-        const passThrough = new PassThrough();
-        req.pipe(passThrough);
-        const gDriveFile = await gDriveService.createFile(fileName, req.headers['content-type'], passThrough);
-        fileDoc.gDriveFileId = gDriveFile.id;
-        fileDoc.status = 'IN_DRIVE';
-        fileDoc.driveUploadTimestamp = new Date();
-        await fileDoc.save();
+        
         const countInDrive = await File.countDocuments({ groupId, status: 'IN_DRIVE' });
         if (countInDrive === groupTotal) {
-            console.log(`[GROUP ${groupId}] All files are in Drive. Triggering immediate transfer to Telegram.`);
+            console.log(`[GROUP ${groupId}] All files confirmed in Drive. Triggering transfer to Telegram.`);
             transferGroupToTelegram(groupId);
         }
-        res.status(201).json({ message: 'File upload to Drive initiated successfully.' });
+        
+        res.status(200).json({ message: 'File upload confirmed successfully.' });
+
     } catch (error) {
-        console.error(`Upload failed for ${fileDoc?.originalName || 'unknown file'}:`, error);
-        if (fileDoc && fileDoc._id) { await File.findByIdAndUpdate(fileDoc._id, { status: 'ERROR' }); }
+        console.error(`Upload confirmation failed:`, error);
         next(error);
     }
 };
 
+// =====================================================================================
+// == THE NEW, EFFICIENT, STREAM-BASED TRANSFER FUNCTION
+// =====================================================================================
 async function transferGroupToTelegram(groupId) {
-    const filesInGroup = await File.find({ groupId, status: 'IN_DRIVE' });
+    try {
+        await File.updateMany(
+            { groupId, status: 'IN_DRIVE' },
+            { $inc: { archiveAttempts: 1 }, $set: { status: 'ARCHIVING' } }
+        );
+    } catch (dbError) {
+        console.error(`[GROUP ${groupId}] DB_ERROR: Could not mark group for archival. Aborting.`, dbError);
+        return;
+    }
+
+    const filesInGroup = await File.find({ groupId, status: 'ARCHIVING' });
     let allTransfersSucceeded = true;
-    console.log(`[GROUP ${groupId}] Starting Bot API transfer for ${filesInGroup.length} files.`);
+    console.log(`[GROUP ${groupId}] Starting direct stream transfer for ${filesInGroup.length} files.`);
 
     for (const fileDoc of filesInGroup) {
-        const tempFilePath = path.join(TEMP_UPLOAD_DIR, `transfer-${fileDoc.uniqueId}-${fileDoc.originalName}`);
-        try {
-            await fileDoc.updateOne({ status: 'ARCHIVING' });
+        console.log(`[GROUP ${groupId}] Processing ${fileDoc.originalName}...`);
 
-            console.log(`[GROUP ${groupId}] Downloading ${fileDoc.originalName} from Drive to temp storage...`);
-            const gDriveStream = await gDriveService.getFileStream(fileDoc.gDriveFileId);
-            const writer = fs.createWriteStream(tempFilePath);
-            await new Promise((resolve, reject) => { gDriveStream.pipe(writer); writer.on('finish', resolve); writer.on('error', reject); });
-            
-            const fileStats = await fs.promises.stat(tempFilePath);
-            const telegramData = [];
-            
-            // =================== CHUNKING LOGIC START ===================
-            if (fileStats.size <= CHUNK_SIZE) {
-                // File is small enough to be uploaded in one part
-                console.log(`[GROUP ${groupId}] File is small. Uploading as single part.`);
-                const { messageId, fileId } = await telegramService.uploadFile(tempFilePath, fileDoc.originalName);
-                telegramData.push({ order: 0, messageId, fileId, size: fileStats.size });
-            } else {
-                // File is large and needs to be chunked
-                console.log(`[GROUP ${groupId}] File is large. Uploading in ${Math.ceil(fileStats.size / CHUNK_SIZE)} chunks of ~18MB.`);
+        // This promise wrapper ensures we wait for one file's entire stream to finish
+        // before starting the next file in the loop.
+        await new Promise(async (resolve, reject) => {
+            let tempChunkPath = null; // To keep track of the temporary chunk file
+            try {
+                const gDriveStream = await gDriveService.getFileStream(fileDoc.gDriveFileId);
+
+                let chunks = [];
+                let currentChunkSize = 0;
                 let chunkIndex = 0;
-                for (let offset = 0; offset < fileStats.size; offset += CHUNK_SIZE) {
-                    const chunkFileName = `${fileDoc.originalName}.part${String(chunkIndex).padStart(4, '0')}`;
-                    const chunkFilePath = `${tempFilePath}.part${chunkIndex}`;
-                    
-                    // Create a small temporary file for the chunk
-                    const readStream = fs.createReadStream(tempFilePath, { start: offset, end: Math.min(offset + CHUNK_SIZE - 1, fileStats.size - 1) });
-                    const writeStream = fs.createWriteStream(chunkFilePath);
-                    await new Promise((resolve, reject) => { readStream.pipe(writeStream); writeStream.on('finish', resolve); writeStream.on('error', reject); });
-                    
-                    const chunkStats = await fs.promises.stat(chunkFilePath);
-                    console.log(`[GROUP ${groupId}] Uploading chunk ${chunkIndex + 1}...`);
-                    const { messageId, fileId } = await telegramService.uploadFile(chunkFilePath, chunkFileName);
-                    
-                    // Delete the temporary chunk file immediately after upload
-                    await fs.promises.unlink(chunkFilePath);
+                const telegramData = [];
 
-                    telegramData.push({ order: chunkIndex, messageId, fileId, size: chunkStats.size });
-                    chunkIndex++;
-                }
+                gDriveStream.on('data', async (data) => {
+                    // Pause the source stream to prevent memory overflow while we process the chunk
+                    gDriveStream.pause();
+
+                    chunks.push(data);
+                    currentChunkSize += data.length;
+
+                    // If we have enough data for a full Telegram chunk, process and upload it
+                    if (currentChunkSize >= CHUNK_SIZE) {
+                        const bufferToUpload = Buffer.concat(chunks);
+                        const safeFileName = sanitize(fileDoc.originalName);
+                        tempChunkPath = path.join(TEMP_UPLOAD_DIR, `${safeFileName}.part${chunkIndex}`);
+                        
+                        try {
+                            console.log(`[GROUP ${groupId}] Writing chunk ${chunkIndex} to temporary file...`);
+                            await fs.promises.writeFile(tempChunkPath, bufferToUpload);
+                            
+                            const chunkStats = await fs.promises.stat(tempChunkPath);
+                            const chunkUploadName = `${fileDoc.originalName}.part${String(chunkIndex).padStart(4, '0')}`;
+                            
+                            console.log(`[GROUP ${groupId}] Uploading chunk ${chunkIndex} (${formatBytes(chunkStats.size)}) to Telegram...`);
+                            const { messageId, fileId } = await telegramService.uploadFile(tempChunkPath, chunkUploadName);
+                            telegramData.push({ order: chunkIndex, messageId, fileId, size: chunkStats.size });
+                            
+                            // Reset for the next chunk
+                            chunks = [];
+                            currentChunkSize = 0;
+                            chunkIndex++;
+                        } finally {
+                            // Immediately delete the temporary chunk file
+                            if (fs.existsSync(tempChunkPath)) {
+                                await fs.promises.unlink(tempChunkPath);
+                            }
+                            tempChunkPath = null;
+                        }
+                    }
+                    // Resume the source stream to get more data
+                    gDriveStream.resume();
+                });
+
+                gDriveStream.on('end', async () => {
+                    try {
+                        // Process the final, potentially smaller chunk if any data is left
+                        if (currentChunkSize > 0) {
+                            const bufferToUpload = Buffer.concat(chunks);
+                            const safeFileName = sanitize(fileDoc.originalName);
+                            tempChunkPath = path.join(TEMP_UPLOAD_DIR, `${safeFileName}.part${chunkIndex}`);
+                            
+                            console.log(`[GROUP ${groupId}] Writing final chunk ${chunkIndex} to temporary file...`);
+                            await fs.promises.writeFile(tempChunkPath, bufferToUpload);
+                            
+                            const chunkStats = await fs.promises.stat(tempChunkPath);
+                            const chunkUploadName = `${fileDoc.originalName}.part${String(chunkIndex).padStart(4, '0')}`;
+                            
+                            console.log(`[GROUP ${groupId}] Uploading final chunk ${chunkIndex} (${formatBytes(chunkStats.size)}) to Telegram...`);
+                            const { messageId, fileId } = await telegramService.uploadFile(tempChunkPath, chunkUploadName);
+                            telegramData.push({ order: chunkIndex, messageId, fileId, size: chunkStats.size });
+
+                            if (fs.existsSync(tempChunkPath)) {
+                                await fs.promises.unlink(tempChunkPath);
+                            }
+                            tempChunkPath = null;
+                        }
+
+                        // All chunks are uploaded, update the database record for this file
+                        await fileDoc.updateOne({
+                            telegramChunks: telegramData,
+                            status: 'IN_TELEGRAM',
+                            thumbnail: null,
+                        });
+                        
+                        console.log(`[GROUP ${groupId}] SUCCESS: Transferred ${fileDoc.originalName} to Telegram in ${telegramData.length} chunk(s).`);
+                        resolve(); // Signal that this file is done
+                    } catch (endError) {
+                        reject(endError); // Reject on error during final chunk processing
+                    }
+                });
+
+                gDriveStream.on('error', (streamError) => {
+                    reject(streamError); // Reject on error from the source stream
+                });
+
+            } catch (error) {
+                console.error(`[GROUP ${groupId}] FATAL ERROR for ${fileDoc.originalName}. Aborting group transfer.`, error.message);
+                await fileDoc.updateOne({ status: 'IN_DRIVE' }); // Revert status for retry
+                allTransfersSucceeded = false;
+                reject(error); // Reject the promise for this file
             }
-            // =================== CHUNKING LOGIC END =====================
-            
-            await fileDoc.updateOne({
-                telegramChunks: telegramData,
-                status: 'IN_TELEGRAM',
-                thumbnail: null,
-            });
-            console.log(`[GROUP ${groupId}] SUCCESS: Transferred ${fileDoc.originalName} to Telegram in ${telegramData.length} chunk(s).`);
-        } catch (error) {
-            console.error(`[GROUP ${groupId}] FATAL BOT API ERROR for ${fileDoc.originalName}. Aborting group transfer.`, error.message);
-            await fileDoc.updateOne({ status: 'ERROR' });
+        }).catch(() => {
+            // If the promise for a file is rejected, we ensure the group fails.
             allTransfersSucceeded = false;
+        });
+
+        // If any file has failed, stop processing the rest of the group.
+        if (!allTransfersSucceeded) {
+            console.error(`[GROUP ${groupId}] A file failed to transfer. Stopping group processing.`);
             break;
-        } finally {
-            if (fs.existsSync(tempFilePath)) {
-                await fs.promises.unlink(tempFilePath);
-            }
         }
     }
     
+    // After the loop, perform final cleanup based on overall success
     if (allTransfersSucceeded) {
         console.log(`[GROUP ${groupId}] All transfers successful. Cleaning up from Google Drive.`);
         const successfullyTransferredFiles = await File.find({ groupId, status: 'IN_TELEGRAM' });
@@ -3299,11 +3393,24 @@ async function transferGroupToTelegram(groupId) {
             }
         }
     } else {
-        console.log(`[GROUP ${groupId}] Transfer failed. Files will remain in Google Drive for a retry.`);
+        console.log(`[GROUP ${groupId}] Transfer failed for one or more files. Other files will remain in Google Drive for a retry.`);
     }
-    console.log(`[GROUP ${groupId}] Finished Bot API processing.`);
+    console.log(`[GROUP ${groupId}] Finished direct stream processing.`);
 }
+
+// Make the function available for the archival janitor in server.js
 exports.transferGroupToTelegram = transferGroupToTelegram;
+
+// Helper function used by the UI. Not part of the transfer logic.
+function formatBytes(bytes, decimals = 2) {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const dm = decimals < 0 ? 0 : decimals;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+}
+
 
 async function getMergedTelegramStream(telegramChunks) {
     // Sort chunks by order to ensure correct assembly
@@ -3393,21 +3500,40 @@ exports.downloadGroupAsZip = async (req, res, next) => {
 
 exports.getGroupMetadata = async (req, res, next) => {
     try {
-        const files = await File.find({ groupId: req.params.groupId }).select('originalName size uniqueId thumbnail');
-        if (!files || files.length === 0) { return res.status(404).json({ message: 'File group not found.' }); }
+        // <-- THE FIX IS HERE: Add a 10-second timeout to the database query.
+        const files = await File.find({ groupId: req.params.groupId })
+            .select('originalName size uniqueId thumbnail')
+            .maxTimeMS(10000); // Fails if the query takes longer than 10 seconds.
+
+        if (!files || files.length === 0) {
+            return res.status(404).json({ message: 'File group not found or has expired.' });
+        }
+        
         const filesWithThumbnails = files.map(file => ({
             originalName: file.originalName,
             size: file.size,
             uniqueId: file.uniqueId,
             thumbnail: file.thumbnail ? file.thumbnail.toString('base64') : null,
         }));
+        
         res.json(filesWithThumbnails);
-    } catch (error) { next(error); }
+    } catch (error) {
+        // If maxTimeMS is exceeded, this catch block will be triggered.
+        console.error(`Error fetching metadata for group ${req.params.groupId}:`, error.message);
+        next(error);
+    }
 };
 
 exports.getMyFiles = async (req, res, next) => {
     try {
-        const files = await File.find({ owner: req.user._id }).sort({ createdAt: -1 }).select('originalName size uniqueId createdAt groupId');
+        // Also a good idea to add a timeout here for consistency.
+        const files = await File.find({ owner: req.user._id })
+            .sort({ createdAt: -1 })
+            .select('originalName size uniqueId createdAt groupId')
+            .maxTimeMS(10000);
+            
         res.json(files);
-    } catch (error) { next(error); }
+    } catch (error) {
+        next(error);
+    }
 };

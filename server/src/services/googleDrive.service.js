@@ -573,63 +573,155 @@
 // };
 
 
+// // server/src/services/googleDrive.service.js
+// const { google } = require('googleapis');
+
+// // --- NEW OAUTH 2.0 CONFIGURATION ---
+// const GDRIVE_FOLDER_ID = process.env.GDRIVE_FOLDER_ID;
+// const GDRIVE_CLIENT_ID = process.env.GDRIVE_CLIENT_ID;
+// const GDRIVE_CLIENT_SECRET = process.env.GDRIVE_CLIENT_SECRET;
+// const GDRIVE_REDIRECT_URI = process.env.GDRIVE_REDIRECT_URI;
+// const GDRIVE_REFRESH_TOKEN = process.env.GDRIVE_REFRESH_TOKEN;
+
+// // Validate that all required environment variables are set
+// if (!GDRIVE_FOLDER_ID || !GDRIVE_CLIENT_ID || !GDRIVE_CLIENT_SECRET || !GDRIVE_REDIRECT_URI || !GDRIVE_REFRESH_TOKEN) {
+//     throw new Error("FATAL: Google Drive OAuth 2.0 credentials are not fully configured. Please check your .env file.");
+// }
+
+// // Create an OAuth2 client
+// const oAuth2Client = new google.auth.OAuth2(
+//     GDRIVE_CLIENT_ID,
+//     GDRIVE_CLIENT_SECRET,
+//     GDRIVE_REDIRECT_URI
+// );
+
+// // Set the refresh token, which allows us to get new access tokens automatically
+// oAuth2Client.setCredentials({ refresh_token: GDRIVE_REFRESH_TOKEN });
+
+// // --- THE FIX IS HERE ---
+// // We initialize the Drive API with a custom, much longer timeout.
+// // This tells gaxios (the underlying HTTP client) to wait up to 2 hours for a response.
+// const drive = google.drive({
+//   version: 'v3',
+//   auth: oAuth2Client,
+//   // Set a global timeout for all requests made with this drive object.
+//   // The value is in milliseconds. 120 * 60 * 1000 = 2 hours.
+//   requestConfig: {
+//     timeout: 120 * 60 * 1000,
+//   },
+// });
+// // --- END OF FIX ---
+
+
+// // Your `createFile` function does NOT need to change.
+// exports.createFile = async (fileName, mimeType, fileStream) => {
+//   const response = await drive.files.create({
+//     requestBody: { name: fileName, parents: [GDRIVE_FOLDER_ID] },
+//     media: { mimeType: mimeType, body: fileStream },
+//     supportsAllDrives: true,
+//   });
+//   return response.data;
+// };
+
+// exports.transferOwnership = async (fileId) => {
+//     console.log(`OAuth2 Client used: Ownership of ${fileId} is already correct. No transfer needed.`);
+//     return;
+// };
+
+// // Also apply a long timeout for downloads, just in case.
+// exports.getFileStream = async (fileId) => {
+//   const response = await drive.files.get(
+//     { fileId, alt: 'media', supportsAllDrives: true },
+//     { responseType: 'stream', timeout: 120 * 60 * 1000 }
+//   );
+//   return response.data;
+// };
+
+// exports.deleteFile = async (fileId) => {
+//   await drive.files.delete({ fileId, supportsAllDrives: true });
+// };
+
+// exports.listAllFiles = async () => {
+//     const response = await drive.files.list({
+//         q: `'${GDRIVE_FOLDER_ID}' in parents and trashed = false`,
+//         fields: 'files(id, name)',
+//         supportsAllDrives: true,
+//         includeItemsFromAllDrives: true,
+//     });
+//     return response.data.files || [];
+// };
+
 // server/src/services/googleDrive.service.js
 const { google } = require('googleapis');
+const axios = require('axios');
 
-// --- NEW OAUTH 2.0 CONFIGURATION ---
+// --- OAUTH 2.0 CONFIGURATION ---
 const GDRIVE_FOLDER_ID = process.env.GDRIVE_FOLDER_ID;
 const GDRIVE_CLIENT_ID = process.env.GDRIVE_CLIENT_ID;
 const GDRIVE_CLIENT_SECRET = process.env.GDRIVE_CLIENT_SECRET;
 const GDRIVE_REDIRECT_URI = process.env.GDRIVE_REDIRECT_URI;
 const GDRIVE_REFRESH_TOKEN = process.env.GDRIVE_REFRESH_TOKEN;
 
-// Validate that all required environment variables are set
 if (!GDRIVE_FOLDER_ID || !GDRIVE_CLIENT_ID || !GDRIVE_CLIENT_SECRET || !GDRIVE_REDIRECT_URI || !GDRIVE_REFRESH_TOKEN) {
     throw new Error("FATAL: Google Drive OAuth 2.0 credentials are not fully configured. Please check your .env file.");
 }
 
-// Create an OAuth2 client
 const oAuth2Client = new google.auth.OAuth2(
     GDRIVE_CLIENT_ID,
     GDRIVE_CLIENT_SECRET,
     GDRIVE_REDIRECT_URI
 );
-
-// Set the refresh token, which allows us to get new access tokens automatically
 oAuth2Client.setCredentials({ refresh_token: GDRIVE_REFRESH_TOKEN });
 
-// --- THE FIX IS HERE ---
-// We initialize the Drive API with a custom, much longer timeout.
-// This tells gaxios (the underlying HTTP client) to wait up to 2 hours for a response.
-const drive = google.drive({
-  version: 'v3',
-  auth: oAuth2Client,
-  // Set a global timeout for all requests made with this drive object.
-  // The value is in milliseconds. 120 * 60 * 1000 = 2 hours.
-  requestConfig: {
-    timeout: 120 * 60 * 1000,
-  },
-});
-// --- END OF FIX ---
+// --- THE FINAL AND CORRECT HIGH-SPEED UPLOAD INITIATION FUNCTION ---
+exports.initiateResumableUpload = async (fileName, mimeType, fileSize, origin) => {
+  try {
+    const { token } = await oAuth2Client.getAccessToken();
+    if (!token) {
+      throw new Error("Unable to retrieve Google Drive access token.");
+    }
 
+    const fileMetadata = {
+      name: fileName,
+      parents: [process.env.GDRIVE_FOLDER_ID],
+    };
 
-// Your `createFile` function does NOT need to change.
-exports.createFile = async (fileName, mimeType, fileStream) => {
-  const response = await drive.files.create({
-    requestBody: { name: fileName, parents: [GDRIVE_FOLDER_ID] },
-    media: { mimeType: mimeType, body: fileStream },
-    supportsAllDrives: true,
-  });
-  return response.data;
+    // Define the precise headers required by the Google Drive Resumable Upload API
+    const headers = {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json; charset=UTF-8',
+      'X-Upload-Content-Type': mimeType,
+      'X-Upload-Content-Length': fileSize.toString(),
+      // --- THE CRITICAL FIX (Part 2): Tell Google which website is allowed to use the upload URL ---
+      'Origin': origin,
+    };
+
+    const response = await axios.post(
+      'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable',
+      fileMetadata,
+      { headers }
+    );
+
+    const uploadUrl = response.headers.location;
+    if (!uploadUrl) {
+      throw new Error("Google Drive API did not return a valid 'location' header for the upload session.");
+    }
+    
+    return { uploadUrl };
+
+  } catch (error) {
+    console.error(
+      "Google Drive Init Error:", 
+      error.response ? `Status: ${error.response.status}, Data: ${JSON.stringify(error.response.data)}` : error.message
+    );
+    throw new Error("Failed to create Google Drive upload session.");
+  }
 };
 
-exports.transferOwnership = async (fileId) => {
-    console.log(`OAuth2 Client used: Ownership of ${fileId} is already correct. No transfer needed.`);
-    return;
-};
+// --- All other functions remain unchanged. They are already correct. ---
 
-// Also apply a long timeout for downloads, just in case.
 exports.getFileStream = async (fileId) => {
+  const drive = google.drive({ version: 'v3', auth: oAuth2Client });
   const response = await drive.files.get(
     { fileId, alt: 'media', supportsAllDrives: true },
     { responseType: 'stream', timeout: 120 * 60 * 1000 }
@@ -638,15 +730,17 @@ exports.getFileStream = async (fileId) => {
 };
 
 exports.deleteFile = async (fileId) => {
+  const drive = google.drive({ version: 'v3', auth: oAuth2Client });
   await drive.files.delete({ fileId, supportsAllDrives: true });
 };
 
 exports.listAllFiles = async () => {
-    const response = await drive.files.list({
-        q: `'${GDRIVE_FOLDER_ID}' in parents and trashed = false`,
-        fields: 'files(id, name)',
-        supportsAllDrives: true,
-        includeItemsFromAllDrives: true,
-    });
-    return response.data.files || [];
+  const drive = google.drive({ version: 'v3', auth: oAuth2Client });
+  const response = await drive.files.list({
+      q: `'${GDRIVE_FOLDER_ID}' in parents and trashed = false`,
+      fields: 'files(id, name)',
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
+  });
+  return response.data.files || [];
 };
