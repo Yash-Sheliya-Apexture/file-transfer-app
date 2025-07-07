@@ -967,7 +967,7 @@
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 const express = require('express');
-const cors = require('cors'); // Re-enabled for local development
+const cors = require('cors');
 const connectDB = require('./utils/database');
 const http = require('http');
 
@@ -983,18 +983,13 @@ connectDB();
 
 const app = express();
 
-// =========================== THE FIX IS HERE ===========================
-// The 'cors' middleware is re-enabled to handle requests during local development.
-// When you deploy, Nginx will handle this, but it's needed for localhost.
-
 const whitelist = [
-    'http://localhost:3000', // Your local frontend URL
-    process.env.FRONTEND_URL, // Your production frontend URL
+    'http://localhost:3000',
+    'https://file-transfer-app-one.vercel.app'
 ].filter(Boolean);
 
 const corsOptions = {
     origin: function (origin, callback) {
-        // Allow requests with no origin (like mobile apps or curl requests)
         if (!origin || whitelist.indexOf(origin) !== -1) {
             callback(null, true);
         } else {
@@ -1006,7 +1001,6 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-// ========================= END OF FIX ==========================
 
 
 app.use('/api/auth', express.json(), authRoutes);
