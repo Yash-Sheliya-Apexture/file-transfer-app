@@ -2913,48 +2913,84 @@
 const File = require('../models/File');
 const gDriveService = require('../services/googleDrive.service');
 const telegramService = require('../services/telegram.service');
-const { PassThrough } = require('stream');
-const archiver = 'archiver';
+const archiver = require('archiver');
 const fs = require('fs');
 const path = require('path');
+const { PassThrough } = require('stream');
 
+// The temporary upload directory is still needed for the Google Drive to Telegram transfer.
 const TEMP_UPLOAD_DIR = path.join(__dirname, '..', '..', 'tmp-uploads');
 fs.mkdirSync(TEMP_UPLOAD_DIR, { recursive: true });
 
-// Using a smaller 15MB chunk size for increased reliability with large files
-const CHUNK_SIZE = 15 * 1024 * 1024;
 
+// --- Updated UploadFile Controller ---
+// This version streams the user's upload directly to Google Drive without saving to disk first.
 exports.uploadFile = async (req, res, next) => {
     let fileDoc;
     try {
+        // Metadata is sent via headers in this model
         const fileName = decodeURIComponent(req.headers['x-file-name']);
         const fileSize = parseInt(req.headers['content-length'], 10);
         const groupId = req.headers['x-group-id'];
         const groupTotal = parseInt(req.headers['x-group-total'], 10);
+
         if (!fileName || !fileSize || !groupId || !groupTotal) {
             return res.status(400).json({ message: 'Missing required file metadata headers.' });
         }
-        fileDoc = new File({ originalName: fileName, size: fileSize, owner: req.user ? req.user._id : null, groupId, groupTotal });
+
+        // Create the database record first
+        fileDoc = new File({
+            originalName: fileName,
+            size: fileSize,
+            owner: req.user ? req.user._id : null,
+            groupId: groupId,
+            groupTotal: parseInt(groupTotal, 10),
+            status: 'UPLOADING_TO_DRIVE', // Initial status
+        });
         await fileDoc.save();
+
+        // Create a PassThrough stream to pipe the request body
         const passThrough = new PassThrough();
         req.pipe(passThrough);
+
+        // Stream the file directly to Google Drive
         const gDriveFile = await gDriveService.createFile(fileName, req.headers['content-type'], passThrough);
+
+        // Once the upload to Drive is complete, update the database record
         fileDoc.gDriveFileId = gDriveFile.id;
         fileDoc.status = 'IN_DRIVE';
         fileDoc.driveUploadTimestamp = new Date();
         await fileDoc.save();
+
+        // Respond to the user *after* the Google Drive upload is finished
+        res.status(201).json({
+            message: 'File successfully uploaded to cloud storage.'
+        });
+
+        // Check if the group is complete to trigger the Telegram transfer
         const countInDrive = await File.countDocuments({ groupId, status: 'IN_DRIVE' });
-        if (countInDrive === groupTotal) {
+        if (countInDrive === fileDoc.groupTotal) {
             console.log(`[GROUP ${groupId}] All files are in Drive. Triggering immediate transfer to Telegram.`);
             transferGroupToTelegram(groupId);
         }
-        res.status(201).json({ message: 'File upload to Drive initiated successfully.' });
+
     } catch (error) {
-        console.error(`Upload failed for ${fileDoc?.originalName || 'unknown file'}:`, error);
-        if (fileDoc && fileDoc._id) { await File.findByIdAndUpdate(fileDoc._id, { status: 'ERROR' }); }
+        console.error(`Upload failed for a file in group ${fileDoc?.groupId || 'unknown'}:`, error);
+        if (fileDoc && fileDoc._id) {
+            await File.findByIdAndUpdate(fileDoc._id, { status: 'ERROR' });
+        }
         next(error);
     }
 };
+
+
+// =========================================================================
+// The rest of the file (transferGroupToTelegram, downloads, etc.) remains the same.
+// =========================================================================
+
+
+// Using a smaller 15MB chunk size for increased reliability with large files
+const CHUNK_SIZE = 15 * 1024 * 1024;
 
 async function transferGroupToTelegram(groupId) {
     const filesInGroup = await File.find({ groupId, status: 'IN_DRIVE' });
@@ -3102,7 +3138,7 @@ exports.downloadGroupAsZip = async (req, res, next) => {
         const zipFileName = `${files[0].originalName.split('.')[0] || 'batch'}.zip`;
         res.setHeader('Content-Disposition', `attachment; filename="${zipFileName}"`);
         res.setHeader('Content-Type', 'application/zip');
-        const archive = archiver('zip', { zlib: { level: 9 } });
+        const archive = require('archiver')('zip', { zlib: { level: 9 } });
         archive.pipe(res);
         archive.directory(tempDir, false);
         await archive.finalize();

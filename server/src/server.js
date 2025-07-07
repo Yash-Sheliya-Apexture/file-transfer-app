@@ -967,7 +967,7 @@
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 const express = require('express');
-const cors = require('cors'); // We still need the import, but won't use it globally
+const cors = require('cors'); // Re-enabled for local development
 const connectDB = require('./utils/database');
 const http = require('http');
 
@@ -984,16 +984,17 @@ connectDB();
 const app = express();
 
 // =========================== THE FIX IS HERE ===========================
-// The Nginx server is now responsible for all CORS headers.
-// We are commenting out the Node.js 'cors' middleware to prevent duplicate headers.
-/*
+// The 'cors' middleware is re-enabled to handle requests during local development.
+// When you deploy, Nginx will handle this, but it's needed for localhost.
+
 const whitelist = [
-    'http://localhost:3000',
-    process.env.FRONTEND_URL,
+    'http://localhost:3000', // Your local frontend URL
+    process.env.FRONTEND_URL, // Your production frontend URL
 ].filter(Boolean);
 
 const corsOptions = {
     origin: function (origin, callback) {
+        // Allow requests with no origin (like mobile apps or curl requests)
         if (!origin || whitelist.indexOf(origin) !== -1) {
             callback(null, true);
         } else {
@@ -1005,7 +1006,6 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-*/
 // ========================= END OF FIX ==========================
 
 
@@ -1023,7 +1023,7 @@ const TWO_HOURS_IN_MS = 2 * 60 * 60 * 1000;
 server.setTimeout(TWO_HOURS_IN_MS);
 
 server.listen(PORT, async () => {
-    console.log(`Server running on port ${PORT} with a ${TWO_HOURS_IN_MS / 1000 / 60} minute timeout.`);
+    console.log(`Server running on port ${PORT} with a 120 minute timeout.`);
 
     try {
         await initializeTelegramClient();
