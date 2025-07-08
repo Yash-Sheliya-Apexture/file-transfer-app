@@ -1569,8 +1569,8 @@ export default function DownloadGroupPage() {
     const [files, setFiles] = useState<FileMetadata[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
-    const [downloading, setDownloading] = useState<Set<string>>(new Set());
     
+    // --- FIX: Removed unused 'downloading' and 'setDownloading' state ---
     const [isZipping, setIsZipping] = useState(false);
     const [zipProgress, setZipProgress] = useState<ZipProgressState>({
         totalFiles: 0, completedFiles: 0, currentFileName: '', overallPercentage: 0, currentFilePercentage: 0
@@ -1663,7 +1663,6 @@ export default function DownloadGroupPage() {
         toast.info("Starting download and zip process...");
 
         try {
-            // Using a classic for loop to process files sequentially for a clear UI
             for (let i = 0; i < files.length; i++) {
                 const file = files[i];
                 
@@ -1682,7 +1681,6 @@ export default function DownloadGroupPage() {
                     throw new Error(`Failed to start download for ${file.originalName}`);
                 }
                 
-                // Create a passthrough stream for this specific file within the zip archive
                 const fileStream = new ZipPassThrough(file.originalName);
                 fileStream.mtime = new Date();
                 zip.add(fileStream);
@@ -1690,27 +1688,22 @@ export default function DownloadGroupPage() {
                 const reader = response.body.getReader();
                 let downloadedBytes = 0;
                 
-                // Read the download stream chunk by chunk
                 while (true) {
                     const { done, value } = await reader.read();
                     if (done) break;
                     
-                    // As soon as a chunk is downloaded, push it into the zipping stream
                     fileStream.push(value);
                     downloadedBytes += value.length;
 
-                    // Update the progress bar for the *current* file in real-time
                     setZipProgress(currentProgress => ({
                         ...currentProgress,
                         currentFilePercentage: (downloadedBytes / file.size) * 100,
                     }));
                 }
                 
-                // Signal to the zipping engine that this specific file's stream is complete
                 fileStream.push(new Uint8Array(0), true);
             }
-
-            // After all file streams have been added and individually ended, finalize the entire archive
+            
             setZipProgress(currentProgress => ({
                 ...currentProgress,
                 completedFiles: files.length,
@@ -1775,6 +1768,7 @@ export default function DownloadGroupPage() {
                                                         <p className="text-xs text-muted-foreground">{formatBytes(file.size)}</p>
                                                     </div>
                                                 </div>
+                                                {/* --- FIX: Disable single download button while zipping --- */}
                                                 <Button size="sm" variant="ghost" onClick={() => handleDownload(file)} disabled={isZipping}>
                                                     <Download className="h-4 w-4" />
                                                 </Button>

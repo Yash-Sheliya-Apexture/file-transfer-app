@@ -1141,7 +1141,8 @@ import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { formatBytes } from '@/utils/format';
-import { UploadCloud, File as FileIcon, X, CheckCircle, AlertCircle, Copy, Loader2, PartyPopper, PackageCheck } from 'lucide-react';
+// --- FIX: Removed unused 'PartyPopper' import ---
+import { UploadCloud, File as FileIcon, X, CheckCircle, AlertCircle, Copy, Loader2, PackageCheck } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -1151,7 +1152,6 @@ type UploadableFile = {
   status: 'pending' | 'uploading' | 'success' | 'error';
   progress: number;
   error?: string;
-  // --- NEW: Track bytes uploaded for this specific file ---
   uploadedBytes: number;
 }
 
@@ -1160,7 +1160,6 @@ export default function HomePage() {
   const [isUploading, setIsUploading] = useState(false);
   const [finalLink, setFinalLink] = useState<string | null>(null);
 
-  // --- NEW: Memoized calculations for total progress ---
   const totalSize = useMemo(() => files.reduce((acc, f) => acc + f.file.size, 0), [files]);
   const totalUploadedBytes = useMemo(() => files.reduce((acc, f) => acc + f.uploadedBytes, 0), [files]);
   const overallProgress = useMemo(() => (totalSize > 0 ? (totalUploadedBytes / totalSize) * 100 : 0), [totalUploadedBytes, totalSize]);
@@ -1170,7 +1169,7 @@ export default function HomePage() {
     const newUploadableFiles: UploadableFile[] = acceptedFiles.map(file => ({
       id: `${file.name}-${file.size}-${file.lastModified}`,
       file, status: 'pending' as const, progress: 0,
-      uploadedBytes: 0, // Initialize with 0
+      uploadedBytes: 0,
     }));
     setFiles(prevFiles => [...prevFiles, ...newUploadableFiles]);
   };
@@ -1212,7 +1211,6 @@ export default function HomePage() {
               const { loaded, total } = progressEvent;
               if (total) {
                 const percentCompleted = Math.round((loaded * 100) / total);
-                // --- MODIFIED: Update both individual and total progress ---
                 setFiles(prev => prev.map(f =>
                   f.id === uploadableFile.id 
                   ? { ...f, progress: percentCompleted, uploadedBytes: loaded } 
@@ -1299,7 +1297,6 @@ export default function HomePage() {
                     <div className="mt-6 space-y-3">
                         <h2 className="font-semibold">{finalLink ? 'Upload Complete' : 'Files to Upload'}</h2>
 
-                        {/* --- NEW: Overall Progress Bar --- */}
                         {isUploading && !allDone && (
                             <div className='p-3 border rounded-lg bg-muted/50 space-y-2'>
                                 <div className='flex justify-between items-center text-sm font-medium'>
