@@ -155,6 +155,38 @@
 // module.exports = mongoose.model('File', FileSchema);
 
 
+// // server/src/models/File.js
+// const mongoose = require('mongoose');
+// const { v4: uuidv4 } = require('uuid');
+
+// const FileSchema = new mongoose.Schema({
+//     originalName: { type: String, required: true },
+//     uniqueId: { type: String, default: () => uuidv4().split('-')[0], unique: true },
+//     size: { type: Number, required: true },
+//     owner: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+//     groupId: { type: String, required: true, index: true },
+//     groupTotal: { type: Number, default: 1 },
+//     driveUploadTimestamp: { type: Date, default: null },
+//     status: {
+//         type: String,
+//         // --- FIX: Reverted to the original, simpler list of statuses ---
+//         enum: ['IN_DRIVE', 'ARCHIVING', 'IN_TELEGRAM', 'ERROR'],
+//         default: 'IN_DRIVE',
+//     },
+//     gDriveFileId: { type: String, default: null },
+//     archiveAttempts: { type: Number, default: 0 },
+//     telegramChunks: [{
+//         order: { type: Number, required: true },
+//         messageId: { type: Number, required: true },
+//         size: { type: Number, required: true },
+//         fileId: { type: String, required: true },
+//     }],
+//     thumbnail: { type: Buffer, default: null },
+// }, { timestamps: true });
+
+// module.exports = mongoose.model('File', FileSchema);
+
+
 // server/src/models/File.js
 const mongoose = require('mongoose');
 const { v4: uuidv4 } = require('uuid');
@@ -169,7 +201,6 @@ const FileSchema = new mongoose.Schema({
     driveUploadTimestamp: { type: Date, default: null },
     status: {
         type: String,
-        // --- FIX: Reverted to the original, simpler list of statuses ---
         enum: ['IN_DRIVE', 'ARCHIVING', 'IN_TELEGRAM', 'ERROR'],
         default: 'IN_DRIVE',
     },
@@ -180,6 +211,9 @@ const FileSchema = new mongoose.Schema({
         messageId: { type: Number, required: true },
         size: { type: Number, required: true },
         fileId: { type: String, required: true },
+        // --- NEW FIELD ---
+        // Stores the index from the TELEGRAM_BOT_TOKENS array.
+        botTokenIndex: { type: Number, required: true },
     }],
     thumbnail: { type: Buffer, default: null },
 }, { timestamps: true });
