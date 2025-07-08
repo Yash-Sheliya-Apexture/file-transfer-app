@@ -1341,7 +1341,7 @@
 //         </div>
 //     );
 // }
-
+// client/src/app/download/[groupId]/page.tsx
 "use client";
 
 import { useEffect, useState } from 'react';
@@ -1532,3 +1532,197 @@ export default function DownloadGroupPage() {
         </div>
     );
 }
+
+// "use client";
+
+// import { useEffect, useState, useCallback } from 'react';
+// import { Button } from "@/components/ui/button";
+// import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+// import { formatBytes } from "@/utils/format";
+// import { Download, File as FileIcon, Loader2, Package, AlertTriangle, PlayCircle, PauseCircle, RotateCcw, CheckCircle } from "lucide-react";
+// import { toast } from "sonner";
+// import { usePathname } from 'next/navigation';
+// import { saveAs } from 'file-saver';
+// import { Progress } from '@/components/ui/progress';
+
+// interface FileMetadata {
+//     originalName: string;
+//     size: number;
+//     uniqueId: string;
+//     thumbnail: string | null;
+// }
+
+// // State for each individual download
+// interface DownloadState {
+//     progress: number; // 0-100
+//     speed: number; // in bytes/sec
+//     status: 'pending' | 'downloading' | 'paused' | 'success' | 'error';
+//     error?: string;
+// }
+
+// export default function DownloadGroupPage() {
+//     const pathname = usePathname();
+//     const groupId = pathname.split('/').pop();
+
+//     const [files, setFiles] = useState<FileMetadata[]>([]);
+//     const [isLoading, setIsLoading] = useState(true);
+//     const [error, setError] = useState<string | null>(null);
+//     // Map to hold the state of each download
+//     const [downloadStates, setDownloadStates] = useState<Map<string, DownloadState>>(new Map());
+
+//     const updateDownloadState = (uniqueId: string, newState: Partial<DownloadState>) => {
+//         setDownloadStates(prev => new Map(prev).set(uniqueId, { ...prev.get(uniqueId)!, ...newState }));
+//     };
+
+//     // --- The New Download Handler with Live Progress ---
+//     const handleDownload = useCallback(async (file: FileMetadata) => {
+//         if (downloadStates.get(file.uniqueId)?.status === 'downloading') return;
+
+//         updateDownloadState(file.uniqueId, { status: 'downloading', progress: 0, speed: 0 });
+        
+//         try {
+//             // 1. Get download instructions from our server (DIRECT or PROXY)
+//             const infoRes = await fetch(`/api/files/download-info/${file.uniqueId}`);
+//             if (!infoRes.ok) throw new Error("Could not get download instructions from server.");
+//             const { method, url } = await infoRes.json();
+
+//             // 2. Fetch the actual file data from the given URL
+//             const response = await fetch(url);
+//             if (!response.ok) throw new Error(`Download failed: ${response.statusText}`);
+
+//             const contentLength = Number(response.headers.get('Content-Length'));
+//             const reader = response.body!.getReader();
+            
+//             let receivedLength = 0;
+//             let chunks: Uint8Array[] = [];
+//             let lastTime = Date.now();
+//             let lastLoaded = 0;
+
+//             while (true) {
+//                 const { done, value } = await reader.read();
+//                 if (done) break;
+
+//                 chunks.push(value);
+//                 receivedLength += value.length;
+                
+//                 const progress = Math.round((receivedLength / contentLength) * 100);
+                
+//                 // Calculate speed every so often
+//                 const currentTime = Date.now();
+//                 if (currentTime - lastTime > 500) { // Update speed every 500ms
+//                     const timeDiff = (currentTime - lastTime) / 1000; // in seconds
+//                     const loadedDiff = receivedLength - lastLoaded;
+//                     const speed = loadedDiff / timeDiff;
+
+//                     updateDownloadState(file.uniqueId, { progress, speed });
+                    
+//                     lastTime = currentTime;
+//                     lastLoaded = receivedLength;
+//                 } else {
+//                      updateDownloadState(file.uniqueId, { progress });
+//                 }
+//             }
+
+//             // 3. Save the completed file
+//             const blob = new Blob(chunks);
+//             saveAs(blob, file.originalName);
+//             updateDownloadState(file.uniqueId, { status: 'success', progress: 100, speed: 0 });
+//             toast.success(`${file.originalName} downloaded successfully.`);
+
+//         } catch (err: any) {
+//             updateDownloadState(file.uniqueId, { status: 'error', error: err.message, speed: 0 });
+//             toast.error(`Failed to download ${file.originalName}`, { description: err.message });
+//         }
+//     }, [downloadStates]);
+
+//     useEffect(() => {
+//         if (!groupId) return;
+//         const fetchMeta = async () => {
+//             // ... (meta fetching logic is the same)
+//             try {
+//                 const res = await fetch(`/api/files/group-meta/${groupId}`);
+//                 if (!res.ok) throw new Error((await res.json()).message);
+//                 const data: FileMetadata[] = await res.json();
+//                 setFiles(data);
+                
+//                 // Initialize download states
+//                 const initialStates = new Map<string, DownloadState>();
+//                 data.forEach(f => initialStates.set(f.uniqueId, { progress: 0, speed: 0, status: 'pending' }));
+//                 setDownloadStates(initialStates);
+
+//                 // --- Auto-download if only one file ---
+//                 if (data.length === 1) {
+//                     handleDownload(data[0]);
+//                 }
+//             } catch (err: any) {
+//                 setError(err.message);
+//             } finally {
+//                 setIsLoading(false);
+//             }
+//         };
+//         fetchMeta();
+//     }, [groupId, handleDownload]);
+
+//     if (isLoading) { /* ... loading UI ... */ }
+//     if (error) { /* ... error UI ... */ }
+
+//     const totalSize = files.reduce((acc, file) => acc + file.size, 0);
+
+//     return (
+//         <div className="flex min-h-screen items-center justify-center bg-gray-50 p-4">
+//             <Card className="w-full max-w-2xl">
+//                 <CardHeader>
+//                     <CardTitle className="flex items-center gap-2 text-2xl"><Package size={28} /> Download Files</CardTitle>
+//                     <CardDescription>
+//                         {files.length} file(s) ready for download. Total size: {formatBytes(totalSize)}.
+//                     </CardDescription>
+//                 </CardHeader>
+//                 <CardContent className="space-y-4">
+//                     <div className="space-y-3 max-h-[50vh] overflow-y-auto rounded-md border p-2">
+//                         {files.map(file => {
+//                             const state = downloadStates.get(file.uniqueId) || { progress: 0, speed: 0, status: 'pending' };
+//                             const isDownloading = state.status === 'downloading';
+//                             const isDone = state.status === 'success';
+
+//                             return (
+//                                 <div key={file.uniqueId} className="flex flex-col gap-2 p-3 hover:bg-muted/50 rounded-md transition-colors">
+//                                     <div className="flex items-center justify-between">
+//                                         <div className="flex items-center gap-3 overflow-hidden">
+//                                             {/* ... thumbnail logic ... */}
+//                                             <div className='overflow-hidden'>
+//                                                 <p className="font-medium text-sm truncate">{file.originalName}</p>
+//                                                 <p className="text-xs text-muted-foreground">{formatBytes(file.size)}</p>
+//                                             </div>
+//                                         </div>
+//                                         <Button size="sm" variant="ghost" onClick={() => handleDownload(file)} disabled={isDownloading || isDone}>
+//                                             {isDone ? <CheckCircle className="h-5 w-5 text-green-500"/> : isDownloading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Download className="h-5 w-5" />}
+//                                         </Button>
+//                                     </div>
+//                                     {(isDownloading || isDone || state.status === 'error') && (
+//                                         <div>
+//                                             <Progress value={state.progress} className={isDone ? 'h-2 [&>div]:bg-green-500' : 'h-2'}/>
+//                                             <div className="flex justify-between items-center text-xs text-muted-foreground mt-1">
+//                                                 <span>
+//                                                     {state.status === 'downloading' && `${state.progress}%`}
+//                                                     {state.status === 'success' && 'Complete'}
+//                                                     {state.status === 'error' && <span className="text-red-500">Error: {state.error}</span>}
+//                                                 </span>
+//                                                 {isDownloading && state.speed > 0 && (
+//                                                     <span>{formatBytes(state.speed)}/s</span>
+//                                                 )}
+//                                             </div>
+//                                         </div>
+//                                     )}
+//                                 </div>
+//                             )
+//                         })}
+//                     </div>
+//                     <Button className="w-full h-12 text-md" onClick={() => files.forEach(handleDownload)}>
+//                         <Download className="mr-2 h-5 w-5" />
+//                         Download All
+//                     </Button>
+//                 </CardContent>
+//             </Card>
+//         </div>
+//     );
+// }

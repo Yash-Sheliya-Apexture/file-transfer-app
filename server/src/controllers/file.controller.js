@@ -3171,6 +3171,7 @@
 // };
 
 // server/src/controllers/file.controller.js
+
 const File = require('../models/File');
 const gDriveService = require('../services/googleDrive.service');
 const telegramService = require('../services/telegram.service');
@@ -3178,7 +3179,6 @@ const { PassThrough } = require('stream');
 const archiver = require('archiver');
 const fs = require('fs');
 const path = require('path');
-// <-- NEW: Import for sanitizing filenames.
 const sanitize = require("sanitize-filename");
 
 const TEMP_UPLOAD_DIR = path.join(__dirname, '..', '..', 'tmp-uploads');
@@ -3186,11 +3186,81 @@ fs.mkdirSync(TEMP_UPLOAD_DIR, { recursive: true });
 
 const CHUNK_SIZE = 18 * 1024 * 1024;
 
+// =====================================================================================
+// == NEW: Archival Queue and Worker Implementation
+// =====================================================================================
+
+// This queue will hold the IDs of groups waiting for archival.
+const archivalQueue = [];
+// This flag acts as a lock to ensure only one transfer happens at a time.
+let isArchivalWorkerRunning = false;
+
+/**
+ * The worker function. It processes one group from the queue at a time.
+ * It's a self-perpetuating loop that runs as long as the queue has items.
+ */
+async function processArchivalQueue() {
+    // If the worker is already busy with a group, do nothing. It will call itself when done.
+    if (isArchivalWorkerRunning) {
+        return;
+    }
+
+    // If the queue is empty, do nothing.
+    if (archivalQueue.length === 0) {
+        console.log('ARCHIVAL WORKER: Queue is empty. Going to sleep.');
+        return;
+    }
+
+    // Lock the worker and get the next job from the queue.
+    isArchivalWorkerRunning = true;
+    const groupId = archivalQueue.shift(); // .shift() gets the first item
+
+    console.log(`ARCHIVAL WORKER: Starting job for group ${groupId}. Queue size is now ${archivalQueue.length}.`);
+
+    try {
+        // The 'await' is critical. It pauses the worker here until the entire group is transferred.
+        await transferGroupToTelegram(groupId);
+        console.log(`ARCHIVAL WORKER: Successfully finished job for group ${groupId}.`);
+    } catch (error) {
+        // The error is already logged inside transferGroupToTelegram.
+        // We log it here again to show it was a worker failure.
+        console.error(`ARCHIVAL WORKER: Job for group ${groupId} FAILED. See error details above.`);
+    } finally {
+        // IMPORTANT: Unlock the worker so it can pick up the next job.
+        isArchivalWorkerRunning = false;
+        // Call the function again to check for the next item in the queue.
+        processArchivalQueue();
+    }
+}
+
+/**
+ * This is the function that schedulers will call. It adds a group to the
+ * queue and kicks off the worker if it's not already running.
+ * @param {string} groupId The ID of the group to schedule for archival.
+ */
+exports.scheduleGroupForArchival = (groupId) => {
+    // Prevent adding the same group to the queue multiple times.
+    if (!archivalQueue.includes(groupId)) {
+        archivalQueue.push(groupId);
+        console.log(`ARCHIVAL SCHEDULER: Group ${groupId} added to queue. Queue size: ${archivalQueue.length}`);
+    } else {
+        console.log(`ARCHIVAL SCHEDULER: Group ${groupId} is already in the queue.`);
+    }
+
+    // Start the worker process. If it's already running, this does nothing.
+    // If it's idle, this wakes it up.
+    processArchivalQueue();
+};
+
+
+// =====================================================================================
+// == THE REST OF THE CONTROLLER
+// =====================================================================================
+
 // This function is now very simple: just get the URL from the service and return it.
 exports.initiateUpload = async (req, res, next) => {
     try {
         const { fileName, mimeType, fileSize } = req.body;
-        // --- THE CRITICAL FIX (Part 1): Get the client's origin from the request headers ---
         const origin = req.headers.origin;
 
         if (!fileName || !mimeType || fileSize === undefined) {
@@ -3200,7 +3270,6 @@ exports.initiateUpload = async (req, res, next) => {
             return res.status(400).json({ message: 'Request must have an Origin header.' });
         }
         
-        // --- Pass the origin to the service function ---
         const { uploadUrl } = await gDriveService.initiateResumableUpload(fileName, mimeType, fileSize, origin);
         
         res.json({ uploadUrl });
@@ -3226,15 +3295,17 @@ exports.uploadFile = async (req, res, next) => {
             groupId,
             groupTotal,
             owner: req.user ? req.user._id : null,
-            status: 'IN_DRIVE', // The upload is complete, so it's IN_DRIVE
+            status: 'IN_DRIVE',
             driveUploadTimestamp: new Date(),
         });
         await fileDoc.save();
         
         const countInDrive = await File.countDocuments({ groupId, status: 'IN_DRIVE' });
+        
+        // --- MODIFIED: Use the new scheduler ---
         if (countInDrive === groupTotal) {
-            console.log(`[GROUP ${groupId}] All files confirmed in Drive. Triggering transfer to Telegram.`);
-            transferGroupToTelegram(groupId);
+            console.log(`[GROUP ${groupId}] All files confirmed in Drive. Scheduling group for transfer.`);
+            exports.scheduleGroupForArchival(groupId);
         }
         
         res.status(200).json({ message: 'File upload confirmed successfully.' });
@@ -3245,9 +3316,9 @@ exports.uploadFile = async (req, res, next) => {
     }
 };
 
-// =====================================================================================
-// == THE NEW, EFFICIENT, STREAM-BASED TRANSFER FUNCTION
-// =====================================================================================
+
+// This function is now the "core" transfer logic for a single group.
+// It is only ever called by the sequential worker. It is NOT exported.
 async function transferGroupToTelegram(groupId) {
     try {
         await File.updateMany(
@@ -3256,20 +3327,21 @@ async function transferGroupToTelegram(groupId) {
         );
     } catch (dbError) {
         console.error(`[GROUP ${groupId}] DB_ERROR: Could not mark group for archival. Aborting.`, dbError);
-        return;
+        // Throw an error to notify the worker that this job failed.
+        throw dbError;
     }
 
     const filesInGroup = await File.find({ groupId, status: 'ARCHIVING' });
     let allTransfersSucceeded = true;
     console.log(`[GROUP ${groupId}] Starting direct stream transfer for ${filesInGroup.length} files.`);
-
+    
+    // --- The key logic is here: this for...of loop with 'await' inside ensures
+    // --- that files within a group are also processed one by one.
     for (const fileDoc of filesInGroup) {
         console.log(`[GROUP ${groupId}] Processing ${fileDoc.originalName}...`);
 
-        // This promise wrapper ensures we wait for one file's entire stream to finish
-        // before starting the next file in the loop.
         await new Promise(async (resolve, reject) => {
-            let tempChunkPath = null; // To keep track of the temporary chunk file
+            let tempChunkPath = null;
             try {
                 const gDriveStream = await gDriveService.getFileStream(fileDoc.gDriveFileId);
 
@@ -3279,60 +3351,44 @@ async function transferGroupToTelegram(groupId) {
                 const telegramData = [];
 
                 gDriveStream.on('data', async (data) => {
-                    // Pause the source stream to prevent memory overflow while we process the chunk
                     gDriveStream.pause();
-
                     chunks.push(data);
                     currentChunkSize += data.length;
 
-                    // If we have enough data for a full Telegram chunk, process and upload it
                     if (currentChunkSize >= CHUNK_SIZE) {
                         const bufferToUpload = Buffer.concat(chunks);
                         const safeFileName = sanitize(fileDoc.originalName);
                         tempChunkPath = path.join(TEMP_UPLOAD_DIR, `${safeFileName}.part${chunkIndex}`);
                         
                         try {
-                            console.log(`[GROUP ${groupId}] Writing chunk ${chunkIndex} to temporary file...`);
                             await fs.promises.writeFile(tempChunkPath, bufferToUpload);
-                            
                             const chunkStats = await fs.promises.stat(tempChunkPath);
                             const chunkUploadName = `${fileDoc.originalName}.part${String(chunkIndex).padStart(4, '0')}`;
-                            
-                            console.log(`[GROUP ${groupId}] Uploading chunk ${chunkIndex} (${formatBytes(chunkStats.size)}) to Telegram...`);
                             const { messageId, fileId } = await telegramService.uploadFile(tempChunkPath, chunkUploadName);
                             telegramData.push({ order: chunkIndex, messageId, fileId, size: chunkStats.size });
                             
-                            // Reset for the next chunk
                             chunks = [];
                             currentChunkSize = 0;
                             chunkIndex++;
                         } finally {
-                            // Immediately delete the temporary chunk file
                             if (fs.existsSync(tempChunkPath)) {
                                 await fs.promises.unlink(tempChunkPath);
                             }
                             tempChunkPath = null;
                         }
                     }
-                    // Resume the source stream to get more data
                     gDriveStream.resume();
                 });
 
                 gDriveStream.on('end', async () => {
                     try {
-                        // Process the final, potentially smaller chunk if any data is left
                         if (currentChunkSize > 0) {
                             const bufferToUpload = Buffer.concat(chunks);
                             const safeFileName = sanitize(fileDoc.originalName);
                             tempChunkPath = path.join(TEMP_UPLOAD_DIR, `${safeFileName}.part${chunkIndex}`);
-                            
-                            console.log(`[GROUP ${groupId}] Writing final chunk ${chunkIndex} to temporary file...`);
                             await fs.promises.writeFile(tempChunkPath, bufferToUpload);
-                            
                             const chunkStats = await fs.promises.stat(tempChunkPath);
                             const chunkUploadName = `${fileDoc.originalName}.part${String(chunkIndex).padStart(4, '0')}`;
-                            
-                            console.log(`[GROUP ${groupId}] Uploading final chunk ${chunkIndex} (${formatBytes(chunkStats.size)}) to Telegram...`);
                             const { messageId, fileId } = await telegramService.uploadFile(tempChunkPath, chunkUploadName);
                             telegramData.push({ order: chunkIndex, messageId, fileId, size: chunkStats.size });
 
@@ -3342,7 +3398,6 @@ async function transferGroupToTelegram(groupId) {
                             tempChunkPath = null;
                         }
 
-                        // All chunks are uploaded, update the database record for this file
                         await fileDoc.updateOne({
                             telegramChunks: telegramData,
                             status: 'IN_TELEGRAM',
@@ -3350,35 +3405,34 @@ async function transferGroupToTelegram(groupId) {
                         });
                         
                         console.log(`[GROUP ${groupId}] SUCCESS: Transferred ${fileDoc.originalName} to Telegram in ${telegramData.length} chunk(s).`);
-                        resolve(); // Signal that this file is done
+                        resolve();
                     } catch (endError) {
-                        reject(endError); // Reject on error during final chunk processing
+                        reject(endError);
+                
                     }
                 });
 
                 gDriveStream.on('error', (streamError) => {
-                    reject(streamError); // Reject on error from the source stream
+                    reject(streamError);
                 });
 
             } catch (error) {
                 console.error(`[GROUP ${groupId}] FATAL ERROR for ${fileDoc.originalName}. Aborting group transfer.`, error.message);
-                await fileDoc.updateOne({ status: 'IN_DRIVE' }); // Revert status for retry
+                await fileDoc.updateOne({ status: 'IN_DRIVE' });
                 allTransfersSucceeded = false;
-                reject(error); // Reject the promise for this file
+                reject(error);
             }
         }).catch(() => {
-            // If the promise for a file is rejected, we ensure the group fails.
             allTransfersSucceeded = false;
         });
 
-        // If any file has failed, stop processing the rest of the group.
         if (!allTransfersSucceeded) {
             console.error(`[GROUP ${groupId}] A file failed to transfer. Stopping group processing.`);
-            break;
+            // When a file fails, we stop the entire group and throw an error to the worker.
+            throw new Error(`File transfer failed for group ${groupId}.`);
         }
     }
     
-    // After the loop, perform final cleanup based on overall success
     if (allTransfersSucceeded) {
         console.log(`[GROUP ${groupId}] All transfers successful. Cleaning up from Google Drive.`);
         const successfullyTransferredFiles = await File.find({ groupId, status: 'IN_TELEGRAM' });
@@ -3392,8 +3446,6 @@ async function transferGroupToTelegram(groupId) {
                 }
             }
         }
-    } else {
-        console.log(`[GROUP ${groupId}] Transfer failed for one or more files. Other files will remain in Google Drive for a retry.`);
     }
     console.log(`[GROUP ${groupId}] Finished direct stream processing.`);
 }
@@ -3497,6 +3549,7 @@ exports.downloadGroupAsZip = async (req, res, next) => {
         fs.promises.rm(tempDir, { recursive: true, force: true }).catch(err => console.error("Error cleaning temp zip dir:", err));
     }
 };
+
 
 exports.getGroupMetadata = async (req, res, next) => {
     try {

@@ -1099,7 +1099,8 @@ const userRoutes = require('./routes/user.routes');
 const fileRoutes = require('./routes/file.routes');
 const errorMiddleware = require('./middleware/error.middleware');
 const File = require('./models/File');
-const { transferGroupToTelegram } = require('./controllers/file.controller');
+// --- MODIFIED: Import the new scheduler function ---
+const { scheduleGroupForArchival } = require('./controllers/file.controller');
 
 connectDB();
 
@@ -1137,11 +1138,14 @@ server.listen(PORT, async () => {
     const ARCHIVE_INTERVAL_MS = 5 * 60 * 1000;
     console.log(`Starting archival janitor. Will run every ${ARCHIVE_INTERVAL_MS / 1000 / 60} minutes.`);
     setInterval(runArchivalProcess, ARCHIVE_INTERVAL_MS);
+    // Run once on startup after a short delay to check for any leftover jobs.
     setTimeout(runArchivalProcess, 10000);
 });
 
+
+// --- MODIFIED: This function now only finds work and adds it to the queue.
 async function runArchivalProcess() {
-    console.log('ARCHIVAL JANITOR: Running job...');
+    console.log('ARCHIVAL JANITOR: Running job to find work...');
     const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
 
     try {
@@ -1150,7 +1154,6 @@ async function runArchivalProcess() {
                 $match: { 
                     status: 'IN_DRIVE', 
                     driveUploadTimestamp: { $ne: null },
-                    // <-- MODIFIED: Prevents groups that have failed 3+ times from being retried.
                     archiveAttempts: { $lt: 3 } 
                 } 
             },
@@ -1171,14 +1174,14 @@ async function runArchivalProcess() {
         ]);
 
         if (archivableGroups.length === 0) {
-            console.log('ARCHIVAL JANITOR: No complete groups are old enough to archive.');
+            console.log('ARCHIVAL JANITOR: No new complete groups are old enough to archive.');
             return;
         }
 
-        console.log(`ARCHIVAL JANITOR: Found ${archivableGroups.length} group(s) to process.`);
+        console.log(`ARCHIVAL JANITOR: Found ${archivableGroups.length} group(s) to schedule.`);
         for (const group of archivableGroups) {
-            // This function is now responsible for incrementing the attempt counter.
-            transferGroupToTelegram(group._id);
+            // This simply adds the group ID to the queue. The worker will handle the rest.
+            scheduleGroupForArchival(group._id);
         }
 
     } catch (error) {

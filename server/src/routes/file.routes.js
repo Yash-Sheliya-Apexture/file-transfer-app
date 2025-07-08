@@ -77,6 +77,7 @@ const {
     uploadFile, 
     downloadFile, 
     getMyFiles, 
+    getDownloadInfo, // <-- NEW
     getGroupMetadata, 
     downloadGroupAsZip 
 } = require('../controllers/file.controller');
