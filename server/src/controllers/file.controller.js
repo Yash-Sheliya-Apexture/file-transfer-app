@@ -3931,7 +3931,7 @@ const uploadFile = async (req, res, next) => {
     }
 };
 
-// --- THE FINAL, UNIFIED downloadFile HANDLER ---
+// --- THE FINAL, PRODUCTION-READY downloadFile HANDLER ---
 const downloadFile = async (req, res, next) => {
     res.setTimeout(0);
     
@@ -3943,18 +3943,27 @@ const downloadFile = async (req, res, next) => {
         const fileSize = file.size;
         const range = req.headers.range;
 
-        let fileStream;
+        // --- NEW, SIMPLIFIED LOGIC ---
 
-        if (range) {
-            // --- A. Handle Range Requests ---
+        // If a range is requested for a file on Telegram, we cannot fulfill it.
+        // The ONLY correct way to handle this is to tell the browser "I can't do that".
+        // Sending a 416 "Range Not Satisfiable" tells the browser to stop trying to resume
+        // and that it must start a new download if it wants the file.
+        // This completely breaks the resume loop.
+        if (range && file.status === 'IN_TELEGRAM') {
+            console.log(`[DOWNLOAD] Denying range request for Telegram file ${file.uniqueId}. Forcing fresh download.`);
+            // This error code is the standard way to reject a range request.
+            return res.status(416).send('Range Not Satisfiable for this file type.');
+        }
+
+        // If the file is on Google Drive, we fully support range requests.
+        if (range && (file.status === 'IN_DRIVE' || file.status === 'ARCHIVING')) {
             const parts = range.replace(/bytes=/, "").split("-");
             const start = parseInt(parts[0], 10);
             const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
             const chunksize = (end - start) + 1;
 
-            if (start >= fileSize) {
-                return res.status(416).send('Requested range not satisfiable');
-            }
+            if (start >= fileSize) return res.status(416).send('Requested range not satisfiable');
 
             res.writeHead(206, { // 206 Partial Content
                 'Content-Range': `bytes ${start}-${end}/${fileSize}`,
@@ -3964,40 +3973,32 @@ const downloadFile = async (req, res, next) => {
                 'Content-Disposition': `attachment; filename="${file.originalName}"`,
             });
             
-            if (file.status === 'IN_DRIVE' || file.status === 'ARCHIVING') {
-                // Google Drive natively supports ranges
-                fileStream = await gDriveService.getPartialFileStream(file.gDriveFileId, { start, end });
-            } else if (file.status === 'IN_TELEGRAM') {
-                // Our new function simulates range support for Telegram
-                fileStream = await getMergedTelegramStream(file.telegramChunks, range, fileSize);
-            } else {
-                return res.end(); // Should not happen, but good practice
-            }
+            const fileStream = await gDriveService.getPartialFileStream(file.gDriveFileId, { start, end });
+            req.on('close', () => fileStream.destroy());
+            fileStream.on('error', (err) => { console.error(`GDRIVE PARTIAL STREAM ERROR:`, err); });
+            fileStream.pipe(res);
+            return; // End execution
+        }
 
+        // --- This part now handles ONLY FULL file downloads ---
+        res.writeHead(200, {
+            'Content-Length': fileSize,
+            'Content-Type': 'application/octet-stream',
+            'Content-Disposition': `attachment; filename="${file.originalName}"`,
+            'Accept-Ranges': 'bytes'
+        });
+
+        let fileStream;
+        if (file.status === 'IN_TELEGRAM') {
+            fileStream = await getMergedTelegramStream(file.telegramChunks);
+        } else if (file.status === 'IN_DRIVE' || file.status === 'ARCHIVING') {
+            fileStream = await gDriveService.getFileStream(file.gDriveFileId);
         } else {
-            // --- B. Handle Full File Downloads ---
-            res.writeHead(200, { // 200 OK
-                'Content-Length': fileSize,
-                'Content-Type': 'application/octet-stream',
-                'Content-Disposition': `attachment; filename="${file.originalName}"`,
-                'Accept-Ranges': 'bytes'
-            });
-
-            if (file.status === 'IN_DRIVE' || file.status === 'ARCHIVING') {
-                fileStream = await gDriveService.getFileStream(file.gDriveFileId);
-            } else if (file.status === 'IN_TELEGRAM') {
-                fileStream = await getMergedTelegramStream(file.telegramChunks, null, fileSize);
-            } else {
-                 return res.end();
-            }
+            return res.end();
         }
         
-        // Universal stream handling for both cases
         req.on('close', () => { if(fileStream?.destroy) fileStream.destroy(); });
-        fileStream.on('error', (err) => {
-            console.error(`STREAM ERROR for ${file.uniqueId}:`, err);
-            if (!res.headersSent) res.status(500).end();
-        });
+        fileStream.on('error', (err) => { console.error(`STREAM ERROR:`, err); });
         fileStream.pipe(res);
 
     } catch (error) {
