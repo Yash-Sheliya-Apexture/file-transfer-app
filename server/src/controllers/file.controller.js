@@ -3771,93 +3771,60 @@ async function transferGroupToTelegram(groupId) {
     }
 }
 
-// --- THE NEW, RANGE-AWARE TELEGRAM STREAMER ---
-async function getMergedTelegramStream(telegramChunks, range, fileSize) {
+async function getMergedTelegramStream(telegramChunks) {
     const sortedChunks = telegramChunks.sort((a, b) => a.order - b.order);
     const passThrough = new PassThrough();
 
-    let startByte = 0;
-    let endByte = fileSize - 1;
-
-    if (range) {
-        const parts = range.replace(/bytes=/, "").split("-");
-        startByte = parseInt(parts[0], 10);
-        endByte = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-    }
-
-    // This async function runs in the background, feeding the stream
     (async () => {
-        let bytesSent = 0;
-        let totalBytesProcessed = 0;
-
         for (const chunk of sortedChunks) {
-            const chunkStartByte = totalBytesProcessed;
-            const chunkEndByte = totalBytesProcessed + chunk.size - 1;
-
-            // --- CORE LOGIC: Check if this chunk is needed at all ---
-            // If the chunk is entirely before the requested start range, skip it.
-            if (chunkEndByte < startByte) {
-                totalBytesProcessed += chunk.size;
-                continue;
-            }
-            // If the chunk is entirely after the requested end range, we are done.
-            if (chunkStartByte > endByte) {
-                break;
-            }
-
             let chunkStream = null;
-            // ... (The failover logic for getting the stream from a healthy bot remains the same) ...
-            try {
-                // This part is unchanged: find a healthy replica
-                let success = false;
-                for (const location of chunk.locations) {
-                    const token = botTokenMap.get(location.botId);
-                    if (token) {
-                        try {
-                            chunkStream = await telegramService.getFileStream(location.fileId, token);
-                            success = true;
-                            break;
-                        } catch (e) { /* try next replica */ }
-                    }
-                }
-                if (!success) throw new Error(`All replicas failed for chunk ${chunk.order}`);
-            } catch (err) {
-                passThrough.emit('error', err);
+            let success = false;
+            
+            if (!chunk.locations || chunk.locations.length === 0) {
+                passThrough.emit('error', new Error(`Chunk ${chunk.order} is unrecoverable: no locations stored.`));
                 return;
             }
 
-            // --- CORE LOGIC: Process the downloaded chunk ---
-            // We have the full stream for the chunk, now we must slice it if necessary.
-            await new Promise((resolve, reject) => {
-                let currentChunkBytesProcessed = 0;
-
-                chunkStream.on('data', (data) => {
-                    const dataStartByte = chunkStartByte + currentChunkBytesProcessed;
-                    const dataEndByte = dataStartByte + data.length - 1;
-                    
-                    // Determine the slice of data that is within the user's requested range
-                    const sliceStart = Math.max(0, startByte - dataStartByte);
-                    const sliceEnd = Math.min(data.length, endByte - dataStartByte + 1);
-
-                    if (sliceStart < sliceEnd) {
-                        passThrough.write(data.slice(sliceStart, sliceEnd));
+            for (const location of chunk.locations) {
+                try {
+                    // --- MODIFIED: Look up token by stable botId ---
+                    const token = botTokenMap.get(location.botId);
+                    if (!token) {
+                        console.warn(`[DOWNLOAD] WARN: Bot with ID '${location.botId}' not found in current config. Replica is inaccessible.`);
+                        continue; // Skip to the next replica
                     }
-                    
-                    currentChunkBytesProcessed += data.length;
+
+                    console.log(`[DOWNLOAD] Fetching chunk ${chunk.order} via bot '${location.botId}'`);
+                    chunkStream = await telegramService.getFileStream(location.fileId, token);
+                    success = true;
+                    console.log(`[DOWNLOAD] Success for chunk ${chunk.order}.`);
+                    break; 
+                } catch (err) {
+                    console.warn(`[DOWNLOAD] WARN: Failed to fetch chunk ${chunk.order} from bot '${location.botId}'. Trying next replica. Error: ${err.message}`);
+                }
+            }
+
+            if (!success || !chunkStream) {
+                passThrough.emit('error', new Error(`Chunk ${chunk.order} is unrecoverable: all replicas failed.`));
+                return;
+            }
+            
+            try {
+                await new Promise((resolve, reject) => {
+                    chunkStream.pipe(passThrough, { end: false });
+                    chunkStream.on('end', resolve);
+                    chunkStream.on('error', reject);
                 });
-
-                chunkStream.on('end', resolve);
-                chunkStream.on('error', reject);
-            });
-
-            totalBytesProcessed += chunk.size;
+            } catch(pipeError) {
+                 passThrough.emit('error', new Error(`Failed to pipe chunk ${chunk.order}: ${pipeError.message}`));
+                 return;
+            }
         }
         passThrough.end();
     })().catch(err => passThrough.emit('error', err));
     
     return passThrough;
 }
-
 
 
 async function processArchivalQueue() {
@@ -3934,74 +3901,94 @@ const uploadFile = async (req, res, next) => {
 // --- THE FINAL, PRODUCTION-READY downloadFile HANDLER ---
 const downloadFile = async (req, res, next) => {
     res.setTimeout(0);
-    
+
     try {
         const file = await File.findOne({ uniqueId: req.params.uniqueId });
-        if (!file) return res.status(404).json({ message: 'File not found.' });
-        if (file.status === 'ERROR') return res.status(500).json({ message: 'This file is corrupted.' });
+
+        if (!file) {
+            return res.status(404).json({ message: 'File not found.' });
+        }
+        if (file.status === 'ERROR') {
+            return res.status(500).json({ message: 'This file is corrupted.' });
+        }
 
         const fileSize = file.size;
         const range = req.headers.range;
 
-        // --- NEW, SIMPLIFIED LOGIC ---
-
-        // If a range is requested for a file on Telegram, we cannot fulfill it.
-        // The ONLY correct way to handle this is to tell the browser "I can't do that".
-        // Sending a 416 "Range Not Satisfiable" tells the browser to stop trying to resume
-        // and that it must start a new download if it wants the file.
-        // This completely breaks the resume loop.
-        if (range && file.status === 'IN_TELEGRAM') {
-            console.log(`[DOWNLOAD] Denying range request for Telegram file ${file.uniqueId}. Forcing fresh download.`);
-            // This error code is the standard way to reject a range request.
-            return res.status(416).send('Range Not Satisfiable for this file type.');
-        }
-
-        // If the file is on Google Drive, we fully support range requests.
-        if (range && (file.status === 'IN_DRIVE' || file.status === 'ARCHIVING')) {
+        // --- PART 1: Handle Range Requests for Resumable Downloads ---
+        if (range) {
             const parts = range.replace(/bytes=/, "").split("-");
             const start = parseInt(parts[0], 10);
             const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-            const chunksize = (end - start) + 1;
 
-            if (start >= fileSize) return res.status(416).send('Requested range not satisfiable');
-
-            res.writeHead(206, { // 206 Partial Content
-                'Content-Range': `bytes ${start}-${end}/${fileSize}`,
-                'Accept-Ranges': 'bytes',
-                'Content-Length': chunksize,
-                'Content-Type': 'application/octet-stream',
-                'Content-Disposition': `attachment; filename="${file.originalName}"`,
-            });
+            if (start >= fileSize) {
+                res.status(416).send('Requested range not satisfiable\n' + start + ' >= ' + fileSize);
+                return;
+            }
             
-            const fileStream = await gDriveService.getPartialFileStream(file.gDriveFileId, { start, end });
-            req.on('close', () => fileStream.destroy());
-            fileStream.on('error', (err) => { console.error(`GDRIVE PARTIAL STREAM ERROR:`, err); });
-            fileStream.pipe(res);
-            return; // End execution
+            const chunksize = (end - start) + 1;
+            
+            // --- A) Google Drive (Supports Range Requests) ---
+            if (file.status === 'IN_DRIVE' || file.status === 'ARCHIVING') {
+                // Set headers for a partial content response
+                res.writeHead(206, {
+                    'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+                    'Accept-Ranges': 'bytes',
+                    'Content-Length': chunksize,
+                    'Content-Type': 'application/octet-stream',
+                    'Content-Disposition': `attachment; filename="${file.originalName}"`,
+                });
+
+                // Get a partial stream from Google Drive
+                const fileStream = await gDriveService.getPartialFileStream(file.gDriveFileId, { start, end });
+                
+                // Setup cleanup on client abort
+                req.on('close', () => fileStream.destroy());
+                fileStream.on('error', (err) => {
+                    console.error(`GDRIVE PARTIAL STREAM ERROR for ${file.uniqueId}:`, err);
+                    if (!res.headersSent) res.status(500).end();
+                });
+                
+                fileStream.pipe(res);
+                return; // Important: end execution here
+            }
+            
+            // --- B) Telegram (Does NOT Support Range Requests) ---
+            // For Telegram, we tell the client we don't support ranges for this file.
+            // This will force the browser to download from the beginning but prevents the resume loop.
+            // We do this by simply ignoring the range header for Telegram files.
         }
 
-        // --- This part now handles ONLY FULL file downloads ---
-        res.writeHead(200, {
-            'Content-Length': fileSize,
-            'Content-Type': 'application/octet-stream',
-            'Content-Disposition': `attachment; filename="${file.originalName}"`,
-            'Accept-Ranges': 'bytes'
-        });
+        // --- PART 2: Handle Full File Downloads (or Telegram files) ---
+        res.setHeader('Content-Disposition', `attachment; filename="${file.originalName}"`);
+        res.setHeader('Content-Length', fileSize);
+        res.setHeader('Content-Type', 'application/octet-stream');
+        // Tell the browser that resumable downloads are possible (even if we only support it for G-Drive)
+        res.setHeader('Accept-Ranges', 'bytes');
 
         let fileStream;
         if (file.status === 'IN_TELEGRAM') {
             fileStream = await getMergedTelegramStream(file.telegramChunks);
         } else if (file.status === 'IN_DRIVE' || file.status === 'ARCHIVING') {
+            // This code path is now only for full downloads of G-Drive files
             fileStream = await gDriveService.getFileStream(file.gDriveFileId);
         } else {
-            return res.end();
+            return res.status(500).json({ message: 'File not in downloadable state.' });
         }
-        
-        req.on('close', () => { if(fileStream?.destroy) fileStream.destroy(); });
-        fileStream.on('error', (err) => { console.error(`STREAM ERROR:`, err); });
+
+        // Setup cleanup on client abort
+        req.on('close', () => {
+            if(fileStream && fileStream.destroy) fileStream.destroy();
+        });
+        fileStream.on('error', (err) => {
+            console.error(`FULL STREAM ERROR for ${file.uniqueId}:`, err);
+            if (!res.headersSent) res.status(500).end();
+        });
+
         fileStream.pipe(res);
 
     } catch (error) {
+        console.error(`DOWNLOAD HANDLER ERROR for ${req.params.uniqueId}:`, error);
         next(error);
     }
 };
