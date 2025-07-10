@@ -3898,30 +3898,73 @@ const uploadFile = async (req, res, next) => {
     }
 };
 
+// --- THE ROBUST, CRASH-PROOF downloadFile HANDLER ---
 const downloadFile = async (req, res, next) => {
-    res.setTimeout(0);
+    res.setTimeout(0); // Disable timeout for long downloads
+    
     try {
         const file = await File.findOne({ uniqueId: req.params.uniqueId });
-        if (!file) { return res.status(404).json({ message: 'File not found.' }); }
-        if (file.status === 'ERROR') {
-             return res.status(500).json({ message: 'This file has been marked as corrupted and cannot be downloaded.' });
+
+        if (!file) {
+            return res.status(404).json({ message: 'File not found.' });
         }
+        if (file.status === 'ERROR') {
+            return res.status(500).json({ message: 'This file is corrupted and cannot be downloaded.' });
+        }
+
         res.setHeader('Content-Disposition', `attachment; filename="${file.originalName}"`);
         res.setHeader('Content-Length', file.size);
         res.setHeader('Content-Type', 'application/octet-stream');
+
+        let fileStream;
         if (file.status === 'IN_TELEGRAM') {
             if (!file.telegramChunks || file.telegramChunks.length === 0) { 
-                return res.status(500).json({ message: 'File is in Telegram but has no chunk data.' }); 
+                return res.status(500).json({ message: 'File has no chunk data.' }); 
             }
-            const stream = await getMergedTelegramStream(file.telegramChunks);
-            stream.pipe(res);
+            fileStream = await getMergedTelegramStream(file.telegramChunks);
         } else if (file.status === 'IN_DRIVE' || file.status === 'ARCHIVING') {
-            const gDriveStream = await gDriveService.getFileStream(file.gDriveFileId);
-            gDriveStream.pipe(res);
+            fileStream = await gDriveService.getFileStream(file.gDriveFileId);
         } else {
-            res.status(500).json({ message: 'File is not available for download.' });
+            return res.status(500).json({ message: 'File is not in a downloadable state.' });
         }
-    } catch (error) { next(error); }
+
+        // --- FIX STARTS HERE ---
+
+        // 1. Listen for the 'close' event (user cancels/disconnects)
+        req.on('close', () => {
+            console.log(`[DOWNLOAD] Client aborted download for file ${file.uniqueId}. Cleaning up stream.`);
+            // Destroy the source stream to stop fetching data from Telegram/G-Drive
+            if (fileStream && typeof fileStream.destroy === 'function') {
+                fileStream.destroy();
+            }
+        });
+
+        // 2. Handle errors from the source stream
+        fileStream.on('error', (err) => {
+            // Check if the error was caused by the client aborting.
+            // Node.js streams often emit an 'aborted' error in this case.
+            if (err.code === 'ERR_STREAM_PREMATURE_CLOSE' || err.message.includes('aborted')) {
+                // This is an expected error when the client disconnects. Log it but don't crash.
+                console.log(`[DOWNLOAD] Stream for ${file.uniqueId} was gracefully aborted.`);
+            } else {
+                // This is an unexpected server-side error.
+                console.error(`STREAMING ERROR for file ${file.uniqueId}:`, err.message);
+            }
+            
+            // We don't try to send a response here because the connection is likely already closed.
+            // We just ensure the server doesn't crash.
+        });
+
+        // 3. Pipe the stream to the response
+        fileStream.pipe(res);
+
+        // --- FIX ENDS HERE ---
+
+    } catch (error) {
+        // This catches errors that happen BEFORE streaming starts (e.g., DB query fails)
+        console.error(`PRE-STREAM ERROR for file ${req.params.uniqueId}:`, error);
+        next(error); // Pass to global error handler
+    }
 };
 
 const getGroupMetadata = async (req, res, next) => {
