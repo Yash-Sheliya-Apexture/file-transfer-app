@@ -3591,12 +3591,10 @@
 //     }
 // };
 
-// server/src/controllers/file.controller.js
 const File = require('../models/File');
 const gDriveService = require('../services/googleDrive.service');
-const telegramService = require('../services/telegram.service');
+const telegramService = require('../services/telegram.service'); 
 const { PassThrough } = require('stream');
-const archiver = require('archiver');
 const fs = require('fs');
 const path = require('path');
 const sanitize = require("sanitize-filename");
@@ -3606,88 +3604,39 @@ fs.mkdirSync(TEMP_UPLOAD_DIR, { recursive: true });
 
 const CHUNK_SIZE = 18 * 1024 * 1024;
 
-// --- NEW: Read the list of all available bot tokens ---
-const botTokens = (process.env.TELEGRAM_BOT_TOKENS || '').split(',').filter(Boolean);
-
-// =====================================================================================
-// == Archival Queue and Worker Implementation
-// =====================================================================================
+// --- MODIFIED: Parse the new JSON bot configuration ---
+let botConfig;
+try {
+    botConfig = JSON.parse(process.env.TELEGRAM_BOT_TOKENS || '[]');
+} catch (e) {
+    throw new Error("FATAL: TELEGRAM_BOT_TOKENS in .env is not valid JSON.");
+}
+const botTokenMap = new Map(botConfig.map(bot => [bot.id, bot.token]));
 
 const archivalQueue = [];
 let isArchivalWorkerRunning = false;
 
-async function processArchivalQueue() {
-    if (isArchivalWorkerRunning || archivalQueue.length === 0) {
-        return;
+// --- MODIFIED: This function now returns full bot config objects {id, token} ---
+function getBotConfigsForChunk(chunkIndex, replicaCount, allBots) {
+    const totalBots = allBots.length;
+    if (replicaCount > totalBots) {
+        console.warn(`Desired replica count (${replicaCount}) is higher than available bots (${totalBots}). Using all available bots.`);
+        replicaCount = totalBots;
     }
-    isArchivalWorkerRunning = true;
-    const groupId = archivalQueue.shift();
-    console.log(`ARCHIVAL WORKER: Starting job for group ${groupId}. Queue size: ${archivalQueue.length}.`);
-    try {
-        await transferGroupToTelegram(groupId);
-        console.log(`ARCHIVAL WORKER: Successfully finished job for group ${groupId}.`);
-    } catch (error) {
-        console.error(`ARCHIVAL WORKER: Job for group ${groupId} FAILED.`);
-    } finally {
-        isArchivalWorkerRunning = false;
-        process.nextTick(processArchivalQueue);
+    const configsToUse = new Map(); // Use a map to prevent duplicate bots
+    for (let i = 0; i < replicaCount; i++) {
+        const botIndex = (chunkIndex + i) % totalBots;
+        const bot = allBots[botIndex];
+        configsToUse.set(bot.id, bot);
     }
+    let retries = 0;
+    while (configsToUse.size < replicaCount && configsToUse.size < totalBots && retries < totalBots * 2) {
+       const randomBot = allBots[Math.floor(Math.random() * totalBots)];
+       configsToUse.set(randomBot.id, randomBot);
+       retries++;
+    }
+    return Array.from(configsToUse.values());
 }
-
-exports.scheduleGroupForArchival = (groupId) => {
-    if (!archivalQueue.includes(groupId)) {
-        archivalQueue.push(groupId);
-        console.log(`ARCHIVAL SCHEDULER: Group ${groupId} added to queue. Queue size: ${archivalQueue.length}`);
-    }
-    processArchivalQueue();
-};
-
-// ... (initiateUpload remains the same) ...
-exports.initiateUpload = async (req, res, next) => {
-    try {
-        const { fileName, mimeType, fileSize } = req.body;
-        const origin = req.headers.origin;
-
-        if (!fileName || !mimeType || fileSize === undefined) {
-            return res.status(400).json({ message: 'fileName, mimeType, and fileSize are required.' });
-        }
-        if (!origin) {
-            return res.status(400).json({ message: 'Request must have an Origin header.' });
-        }
-        
-        const { uploadUrl } = await gDriveService.initiateResumableUpload(fileName, mimeType, fileSize, origin);
-        
-        res.json({ uploadUrl });
-
-    } catch (error) {
-        console.error("Controller Error in initiateUpload:", error.message);
-        next(error); 
-    }
-};
-
-exports.uploadFile = async (req, res, next) => {
-    try {
-        const { originalName, size, gDriveFileId, groupId, groupTotal } = req.body;
-        if (!originalName || !size || !gDriveFileId || !groupId || !groupTotal) {
-            return res.status(400).json({ message: 'Missing required file metadata for confirmation.' });
-        }
-        const fileDoc = new File({
-            originalName, size, gDriveFileId, groupId, groupTotal,
-            owner: req.user ? req.user._id : null,
-            status: 'IN_DRIVE', driveUploadTimestamp: new Date(),
-        });
-        await fileDoc.save();
-        const countInDrive = await File.countDocuments({ groupId, status: 'IN_DRIVE' });
-        if (countInDrive === groupTotal) {
-            console.log(`[GROUP ${groupId}] All files confirmed in Drive. Scheduling group for transfer.`);
-            exports.scheduleGroupForArchival(groupId);
-        }
-        res.status(200).json({ message: 'File upload confirmed successfully.' });
-    } catch (error) {
-        console.error(`Upload confirmation failed:`, error);
-        next(error);
-    }
-};
 
 async function transferGroupToTelegram(groupId) {
     try {
@@ -3703,6 +3652,14 @@ async function transferGroupToTelegram(groupId) {
     const filesInGroup = await File.find({ groupId, status: 'ARCHIVING' });
     let allTransfersSucceeded = true;
     console.log(`[GROUP ${groupId}] Starting transfer for ${filesInGroup.length} files.`);
+    
+    const desiredReplicaCount = parseInt(process.env.TELEGRAM_REPLICA_COUNT, 10) || 2;
+
+    if (botConfig.length < desiredReplicaCount) {
+        console.error(`[GROUP ${groupId}] FATAL: Not enough bot tokens (${botConfig.length}) to satisfy desired replica count of ${desiredReplicaCount}. Aborting.`);
+        await File.updateMany({ groupId, status: 'ARCHIVING' }, { $set: { status: 'IN_DRIVE' }});
+        return;
+    }
 
     for (const fileDoc of filesInGroup) {
         console.log(`[GROUP ${groupId}] Processing ${fileDoc.originalName}...`);
@@ -3723,16 +3680,27 @@ async function transferGroupToTelegram(groupId) {
                         const chunkStats = await fs.promises.stat(tempChunkPath);
                         const chunkUploadName = `${fileDoc.originalName}.part${String(chunkIndex).padStart(4, '0')}`;
                         
-                        // --- MODIFIED: Round-robin bot selection ---
-                        const currentBotIndex = chunkIndex % botTokens.length;
-                        const currentBotToken = botTokens[currentBotIndex];
+                        const chunkLocations = [];
+                        // --- MODIFIED: Get full bot configs to use ---
+                        const botConfigsToUse = getBotConfigsForChunk(chunkIndex, desiredReplicaCount, botConfig);
+
+                        console.log(`[GROUP ${groupId}] Uploading chunk ${chunkIndex} via bots: [${botConfigsToUse.map(b => b.id).join(', ')}]`);
+
+                        for (const bot of botConfigsToUse) {
+                            try {
+                                // --- MODIFIED: Use bot.token for upload, store bot.id ---
+                                const { messageId, fileId } = await telegramService.uploadFile(tempChunkPath, chunkUploadName, bot.token);
+                                chunkLocations.push({ botId: bot.id, messageId, fileId });
+                            } catch (uploadError) {
+                                console.warn(`[GROUP ${groupId}] WARNING: Failed to upload chunk ${chunkIndex} via bot '${bot.id}'.`, uploadError);
+                            }
+                        }
+
+                        if (chunkLocations.length === 0) {
+                            throw new Error(`FATAL: All replica uploads failed for chunk ${chunkIndex} of ${fileDoc.originalName}.`);
+                        }
                         
-                        console.log(`[GROUP ${groupId}] Uploading chunk ${chunkIndex} using Bot #${currentBotIndex}...`);
-                        const { messageId, fileId } = await telegramService.uploadFile(tempChunkPath, chunkUploadName, currentBotToken);
-                        
-                        // --- MODIFIED: Save the bot index with the chunk data ---
-                        telegramData.push({ order: chunkIndex, messageId, fileId, size: chunkStats.size, botTokenIndex: currentBotIndex });
-                        
+                        telegramData.push({ order: chunkIndex, size: chunkStats.size, locations: chunkLocations });
                         chunkIndex++;
                     } finally {
                         if (fs.existsSync(tempChunkPath)) await fs.promises.unlink(tempChunkPath);
@@ -3762,7 +3730,7 @@ async function transferGroupToTelegram(groupId) {
                             status: 'IN_TELEGRAM',
                             thumbnail: null,
                         });
-                        console.log(`[GROUP ${groupId}] SUCCESS: Transferred ${fileDoc.originalName}`);
+                        console.log(`[GROUP ${groupId}] SUCCESS: Transferred & Replicated ${fileDoc.originalName}`);
                         resolve();
                     } catch (endError) {
                         reject(endError);
@@ -3773,10 +3741,9 @@ async function transferGroupToTelegram(groupId) {
 
             } catch (error) {
                 console.error(`[GROUP ${groupId}] FATAL ERROR for ${fileDoc.originalName}.`, error.message);
-                await fileDoc.updateOne({ status: 'IN_DRIVE' }); // Revert status
+                await fileDoc.updateOne({ status: 'IN_DRIVE' });
                 allTransfersSucceeded = false;
                 reject(error);
-
             }
         }).catch(() => {
             allTransfersSucceeded = false;
@@ -3810,26 +3777,47 @@ async function getMergedTelegramStream(telegramChunks) {
 
     (async () => {
         for (const chunk of sortedChunks) {
-            if (!chunk.fileId || chunk.botTokenIndex === undefined) {
-                passThrough.emit('error', new Error(`Chunk ${chunk.order} is missing data.`));
+            let chunkStream = null;
+            let success = false;
+            
+            if (!chunk.locations || chunk.locations.length === 0) {
+                passThrough.emit('error', new Error(`Chunk ${chunk.order} is unrecoverable: no locations stored.`));
                 return;
             }
-            try {
-                // --- MODIFIED: Select the correct bot for this chunk ---
-                const token = botTokens[chunk.botTokenIndex];
-                if (!token) {
-                     throw new Error(`Invalid botTokenIndex ${chunk.botTokenIndex} for chunk ${chunk.order}`);
+
+            for (const location of chunk.locations) {
+                try {
+                    // --- MODIFIED: Look up token by stable botId ---
+                    const token = botTokenMap.get(location.botId);
+                    if (!token) {
+                        console.warn(`[DOWNLOAD] WARN: Bot with ID '${location.botId}' not found in current config. Replica is inaccessible.`);
+                        continue; // Skip to the next replica
+                    }
+
+                    console.log(`[DOWNLOAD] Fetching chunk ${chunk.order} via bot '${location.botId}'`);
+                    chunkStream = await telegramService.getFileStream(location.fileId, token);
+                    success = true;
+                    console.log(`[DOWNLOAD] Success for chunk ${chunk.order}.`);
+                    break; 
+                } catch (err) {
+                    console.warn(`[DOWNLOAD] WARN: Failed to fetch chunk ${chunk.order} from bot '${location.botId}'. Trying next replica. Error: ${err.message}`);
                 }
-                const chunkStream = await telegramService.getFileStream(chunk.fileId, token);
-                
+            }
+
+            if (!success || !chunkStream) {
+                passThrough.emit('error', new Error(`Chunk ${chunk.order} is unrecoverable: all replicas failed.`));
+                return;
+            }
+            
+            try {
                 await new Promise((resolve, reject) => {
                     chunkStream.pipe(passThrough, { end: false });
                     chunkStream.on('end', resolve);
                     chunkStream.on('error', reject);
                 });
-            } catch (err) {
-                passThrough.emit('error', new Error(`Failed to fetch/pipe chunk ${chunk.order}: ${err.message}`));
-                return;
+            } catch(pipeError) {
+                 passThrough.emit('error', new Error(`Failed to pipe chunk ${chunk.order}: ${pipeError.message}`));
+                 return;
             }
         }
         passThrough.end();
@@ -3838,17 +3826,93 @@ async function getMergedTelegramStream(telegramChunks) {
     return passThrough;
 }
 
-// ... (The rest of the file: downloadFile, downloadGroupAsZip, getGroupMetadata, etc. remains the same) ...
-exports.downloadFile = async (req, res, next) => {
+
+async function processArchivalQueue() {
+    if (isArchivalWorkerRunning || archivalQueue.length === 0) {
+        return;
+    }
+    isArchivalWorkerRunning = true;
+    const groupId = archivalQueue.shift();
+    console.log(`ARCHIVAL WORKER: Starting job for group ${groupId}. Queue size: ${archivalQueue.length}.`);
+    try {
+        await transferGroupToTelegram(groupId);
+        console.log(`ARCHIVAL WORKER: Successfully finished job for group ${groupId}.`);
+    } catch (error) {
+        console.error(`ARCHIVAL WORKER: Job for group ${groupId} FAILED. Error: ${error.message}`);
+    } finally {
+        isArchivalWorkerRunning = false;
+        process.nextTick(processArchivalQueue);
+    }
+}
+
+// ... the rest of the file (API handlers) is unchanged and correct ...
+// It uses the functions defined above.
+
+const scheduleGroupForArchival = (groupId) => {
+    if (!archivalQueue.includes(groupId)) {
+        archivalQueue.push(groupId);
+        console.log(`ARCHIVAL SCHEDULER: Group ${groupId} added to queue. Queue size: ${archivalQueue.length}`);
+    }
+    processArchivalQueue();
+};
+
+const initiateUpload = async (req, res, next) => {
+    try {
+        const { fileName, mimeType, fileSize } = req.body;
+        const origin = req.headers.origin;
+        if (!fileName || !mimeType || fileSize === undefined) {
+            return res.status(400).json({ message: 'fileName, mimeType, and fileSize are required.' });
+        }
+        if (!origin) {
+            return res.status(400).json({ message: 'Request must have an Origin header.' });
+        }
+        const { uploadUrl } = await gDriveService.initiateResumableUpload(fileName, mimeType, fileSize, origin);
+        res.json({ uploadUrl });
+    } catch (error) {
+        console.error("Controller Error in initiateUpload:", error.message);
+        next(error); 
+    }
+};
+
+const uploadFile = async (req, res, next) => {
+    try {
+        const { originalName, size, gDriveFileId, groupId, groupTotal } = req.body;
+        if (!originalName || !size || !gDriveFileId || !groupId || !groupTotal) {
+            return res.status(400).json({ message: 'Missing required file metadata for confirmation.' });
+        }
+        const fileDoc = new File({
+            originalName, size, gDriveFileId, groupId, groupTotal,
+            owner: req.user ? req.user._id : null,
+            status: 'IN_DRIVE', driveUploadTimestamp: new Date(),
+        });
+        await fileDoc.save();
+        const countInDrive = await File.countDocuments({ groupId, status: 'IN_DRIVE' });
+        if (countInDrive === groupTotal) {
+            console.log(`[GROUP ${groupId}] All files confirmed in Drive. Scheduling group for transfer.`);
+            scheduleGroupForArchival(groupId);
+        }
+        res.status(200).json({ message: 'File upload confirmed successfully.' });
+    } catch (error) {
+        console.error(`Upload confirmation failed:`, error);
+        next(error);
+    }
+};
+
+const downloadFile = async (req, res, next) => {
     res.setTimeout(0);
     try {
         const file = await File.findOne({ uniqueId: req.params.uniqueId });
         if (!file) { return res.status(404).json({ message: 'File not found.' }); }
+        if (file.status === 'ERROR') {
+             return res.status(500).json({ message: 'This file has been marked as corrupted and cannot be downloaded.' });
+        }
         res.setHeader('Content-Disposition', `attachment; filename="${file.originalName}"`);
         res.setHeader('Content-Length', file.size);
         res.setHeader('Content-Type', 'application/octet-stream');
         if (file.status === 'IN_TELEGRAM') {
-            if (!file.telegramChunks || file.telegramChunks.length === 0) { return res.status(500).json({ message: 'File is in Telegram but has no chunk data.' }); }
+            if (!file.telegramChunks || file.telegramChunks.length === 0) { 
+                return res.status(500).json({ message: 'File is in Telegram but has no chunk data.' }); 
+            }
             const stream = await getMergedTelegramStream(file.telegramChunks);
             stream.pipe(res);
         } else if (file.status === 'IN_DRIVE' || file.status === 'ARCHIVING') {
@@ -3860,56 +3924,20 @@ exports.downloadFile = async (req, res, next) => {
     } catch (error) { next(error); }
 };
 
-// exports.downloadGroupAsZip = async (req, res, next) => {
-//     res.setTimeout(0);
-//     const { groupId } = req.params;
-//     const tempDir = path.join(TEMP_UPLOAD_DIR, `zip-${groupId}-${Date.now()}`);
-//     try {
-//         await fs.promises.mkdir(tempDir, { recursive: true });
-//         const files = await File.find({ groupId }).sort({ createdAt: 1 });
-//         if (!files || files.length === 0) { return res.status(404).json({ message: 'No files found.' }); }
-//         for (const file of files) {
-//             const localFilePath = path.join(tempDir, file.originalName);
-//             const writer = fs.createWriteStream(localFilePath);
-//             let sourceStream;
-//             if (file.status === 'IN_TELEGRAM' && file.telegramChunks && file.telegramChunks.length > 0) {
-//                 sourceStream = await getMergedTelegramStream(file.telegramChunks);
-//             } else if ((file.status === 'IN_DRIVE' || file.status === 'ARCHIVING') && file.gDriveFileId) {
-//                 sourceStream = await gDriveService.getFileStream(file.gDriveFileId);
-//             } else { continue; }
-//             await new Promise((resolve, reject) => { sourceStream.pipe(writer); writer.on('finish', resolve); writer.on('error', reject); });
-//         }
-//         const zipFileName = `${files[0].originalName.split('.')[0] || 'batch'}.zip`;
-//         res.setHeader('Content-Disposition', `attachment; filename="${zipFileName}"`);
-//         res.setHeader('Content-Type', 'application/zip');
-//         const archive = require('archiver')('zip', { zlib: { level: 9 } });
-//         archive.pipe(res);
-//         archive.directory(tempDir, false);
-//         await archive.finalize();
-//     } catch (error) {
-//         next(error);
-//     } finally {
-//         fs.promises.rm(tempDir, { recursive: true, force: true }).catch(err => console.error("Error cleaning temp zip dir:", err));
-//     }
-// };
-
-exports.getGroupMetadata = async (req, res, next) => {
+const getGroupMetadata = async (req, res, next) => {
     try {
         const files = await File.find({ groupId: req.params.groupId })
             .select('originalName size uniqueId thumbnail')
             .maxTimeMS(10000);
-
         if (!files || files.length === 0) {
             return res.status(404).json({ message: 'File group not found or has expired.' });
         }
-        
         const filesWithThumbnails = files.map(file => ({
             originalName: file.originalName,
             size: file.size,
             uniqueId: file.uniqueId,
             thumbnail: file.thumbnail ? file.thumbnail.toString('base64') : null,
         }));
-        
         res.json(filesWithThumbnails);
     } catch (error) {
         console.error(`Error fetching metadata for group ${req.params.groupId}:`, error.message);
@@ -3917,15 +3945,23 @@ exports.getGroupMetadata = async (req, res, next) => {
     }
 };
 
-exports.getMyFiles = async (req, res, next) => {
+const getMyFiles = async (req, res, next) => {
     try {
         const files = await File.find({ owner: req.user._id })
             .sort({ createdAt: -1 })
             .select('originalName size uniqueId createdAt groupId')
             .maxTimeMS(10000);
-            
         res.json(files);
     } catch (error) {
         next(error);
     }
+};
+
+module.exports = {
+    scheduleGroupForArchival,
+    initiateUpload,
+    uploadFile,
+    downloadFile,
+    getGroupMetadata,
+    getMyFiles
 };

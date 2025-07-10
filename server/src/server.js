@@ -1086,26 +1086,135 @@
 // }
 
 
+// // server/src/server.js
+// const path = require('path');
+// require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
+// const express = require('express');
+// const cors = require('cors');
+// const connectDB = require('./utils/database');
+// const http = require('http');
+
+// const authRoutes = require('./routes/auth.routes');
+// const userRoutes = require('./routes/user.routes');
+// const fileRoutes = require('./routes/file.routes');
+// const errorMiddleware = require('./middleware/error.middleware');
+// const File = require('./models/File');
+// // --- MODIFIED: Import the new scheduler function ---
+// const { scheduleGroupForArchival } = require('./controllers/file.controller');
+
+// connectDB();
+
+// const app = express();
+
+// const defaultAllowedOrigins = 'http://localhost:3000,https://file-transfer-app-one.vercel.app';
+// const allowedOriginsEnv = process.env.ALLOWED_ORIGINS || defaultAllowedOrigins;
+// const allowedOrigins = allowedOriginsEnv.split(',').map(origin => origin.trim()).filter(Boolean);
+// console.log("Allowed CORS Origins:", allowedOrigins);
+// const corsOptions = {
+//     origin: (origin, callback) => {
+//         if (!origin || allowedOrigins.includes(origin)) {
+//             callback(null, true);
+//         } else {
+//             console.error(`CORS Error: Origin ${origin} is not allowed.`);
+//             callback(new Error('Not allowed by CORS'));
+//         }
+//     },
+//     credentials: true,
+// };
+// app.use(cors(corsOptions));
+// app.use(express.json()); // Apply globally here
+
+// app.use('/api/auth', authRoutes);
+// app.use('/api/users', userRoutes);
+// app.use('/api/files', fileRoutes);
+// app.use(errorMiddleware);
+
+// const PORT = process.env.PORT || 5000;
+// const server = http.createServer(app);
+// const TWO_HOURS_IN_MS = 2 * 60 * 60 * 1000;
+// server.setTimeout(TWO_HOURS_IN_MS);
+
+// server.listen(PORT, async () => {
+//     console.log(`Server running on port ${PORT} with a 120 minute timeout.`);
+//     const ARCHIVE_INTERVAL_MS = 5 * 60 * 1000;
+//     console.log(`Starting archival janitor. Will run every ${ARCHIVE_INTERVAL_MS / 1000 / 60} minutes.`);
+//     setInterval(runArchivalProcess, ARCHIVE_INTERVAL_MS);
+//     // Run once on startup after a short delay to check for any leftover jobs.
+//     setTimeout(runArchivalProcess, 10000);
+// });
+
+
+// // --- MODIFIED: This function now only finds work and adds it to the queue.
+// async function runArchivalProcess() {
+//     console.log('ARCHIVAL JANITOR: Running job to find work...');
+//     const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+
+//     try {
+//         const archivableGroups = await File.aggregate([
+//             { 
+//                 $match: { 
+//                     status: 'IN_DRIVE', 
+//                     driveUploadTimestamp: { $ne: null },
+//                     archiveAttempts: { $lt: 3 } 
+//                 } 
+//             },
+//             {
+//                 $group: {
+//                     _id: '$groupId',
+//                     countInDrive: { $sum: 1 },
+//                     groupTotal: { $first: '$groupTotal' },
+//                     lastUploadTime: { $max: '$driveUploadTimestamp' }
+//                 }
+//             },
+//             {
+//                 $match: {
+//                     $expr: { $eq: ['$countInDrive', '$groupTotal'] },
+//                     lastUploadTime: { $lte: fiveMinutesAgo }
+//                 }
+//             }
+//         ]);
+
+//         if (archivableGroups.length === 0) {
+//             console.log('ARCHIVAL JANITOR: No new complete groups are old enough to archive.');
+//             return;
+//         }
+
+//         console.log(`ARCHIVAL JANITOR: Found ${archivableGroups.length} group(s) to schedule.`);
+//         for (const group of archivableGroups) {
+//             // This simply adds the group ID to the queue. The worker will handle the rest.
+//             scheduleGroupForArchival(group._id);
+//         }
+
+//     } catch (error) {
+//         console.error('ARCHIVAL JANITOR: Error during group identification:', error);
+//     }
+//     console.log('ARCHIVAL JANITOR: Job finished.');
+// }
+
 // server/src/server.js
+
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 const express = require('express');
 const cors = require('cors');
-const connectDB = require('./utils/database');
 const http = require('http');
 
+// --- All imports should be at the top ---
+const connectDB = require('./utils/database');
 const authRoutes = require('./routes/auth.routes');
 const userRoutes = require('./routes/user.routes');
 const fileRoutes = require('./routes/file.routes');
 const errorMiddleware = require('./middleware/error.middleware');
-const File = require('./models/File');
-// --- MODIFIED: Import the new scheduler function ---
 const { scheduleGroupForArchival } = require('./controllers/file.controller');
+const healthService = require('./services/health.service'); // CORRECT: Import the service module here
+const File = require('./models/File');
 
+// --- Start Database Connection ---
 connectDB();
 
 const app = express();
 
+// --- CORS Configuration ---
 const defaultAllowedOrigins = 'http://localhost:3000,https://file-transfer-app-one.vercel.app';
 const allowedOriginsEnv = process.env.ALLOWED_ORIGINS || defaultAllowedOrigins;
 const allowedOrigins = allowedOriginsEnv.split(',').map(origin => origin.trim()).filter(Boolean);
@@ -1121,56 +1230,28 @@ const corsOptions = {
     },
     credentials: true,
 };
-app.use(cors(corsOptions));
 
-app.use('/api/auth', express.json(), authRoutes);
-app.use('/api/users', express.json(), userRoutes);
+// --- Middleware ---
+app.use(cors(corsOptions));
+app.use(express.json());
+
+// --- API Routes ---
+app.use('/api/auth', authRoutes);
+app.use('/api/users', userRoutes);
 app.use('/api/files', fileRoutes);
 app.use(errorMiddleware);
 
-const PORT = process.env.PORT || 5000;
-const server = http.createServer(app);
-const TWO_HOURS_IN_MS = 2 * 60 * 60 * 1000;
-server.setTimeout(TWO_HOURS_IN_MS);
 
-server.listen(PORT, async () => {
-    console.log(`Server running on port ${PORT} with a 120 minute timeout.`);
-    const ARCHIVE_INTERVAL_MS = 5 * 60 * 1000;
-    console.log(`Starting archival janitor. Will run every ${ARCHIVE_INTERVAL_MS / 1000 / 60} minutes.`);
-    setInterval(runArchivalProcess, ARCHIVE_INTERVAL_MS);
-    // Run once on startup after a short delay to check for any leftover jobs.
-    setTimeout(runArchivalProcess, 10000);
-});
-
-
-// --- MODIFIED: This function now only finds work and adds it to the queue.
+// --- Define Background Job Functions ---
 async function runArchivalProcess() {
     console.log('ARCHIVAL JANITOR: Running job to find work...');
     const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
 
     try {
         const archivableGroups = await File.aggregate([
-            { 
-                $match: { 
-                    status: 'IN_DRIVE', 
-                    driveUploadTimestamp: { $ne: null },
-                    archiveAttempts: { $lt: 3 } 
-                } 
-            },
-            {
-                $group: {
-                    _id: '$groupId',
-                    countInDrive: { $sum: 1 },
-                    groupTotal: { $first: '$groupTotal' },
-                    lastUploadTime: { $max: '$driveUploadTimestamp' }
-                }
-            },
-            {
-                $match: {
-                    $expr: { $eq: ['$countInDrive', '$groupTotal'] },
-                    lastUploadTime: { $lte: fiveMinutesAgo }
-                }
-            }
+            { $match: { status: 'IN_DRIVE', driveUploadTimestamp: { $ne: null }, archiveAttempts: { $lt: 3 } } },
+            { $group: { _id: '$groupId', countInDrive: { $sum: 1 }, groupTotal: { $first: '$groupTotal' }, lastUploadTime: { $max: '$driveUploadTimestamp' } } },
+            { $match: { $expr: { $eq: ['$countInDrive', '$groupTotal'] }, lastUploadTime: { $lte: fiveMinutesAgo } } }
         ]);
 
         if (archivableGroups.length === 0) {
@@ -1180,12 +1261,33 @@ async function runArchivalProcess() {
 
         console.log(`ARCHIVAL JANITOR: Found ${archivableGroups.length} group(s) to schedule.`);
         for (const group of archivableGroups) {
-            // This simply adds the group ID to the queue. The worker will handle the rest.
             scheduleGroupForArchival(group._id);
         }
-
     } catch (error) {
         console.error('ARCHIVAL JANITOR: Error during group identification:', error);
     }
     console.log('ARCHIVAL JANITOR: Job finished.');
 }
+
+
+// --- Server Initialization and Job Scheduling ---
+const PORT = process.env.PORT || 5000;
+const server = http.createServer(app);
+server.setTimeout(2 * 60 * 60 * 1000);
+
+server.listen(PORT, () => {
+    console.log(`Server running on port ${PORT} with a 120 minute timeout.`);
+
+    // Archival Janitor Schedule
+    const ARCHIVE_INTERVAL_MS = 5 * 60 * 1000;
+    console.log(`Starting archival janitor. Will run every ${ARCHIVE_INTERVAL_MS / 1000 / 60} minutes.`);
+    setInterval(runArchivalProcess, ARCHIVE_INTERVAL_MS);
+    setTimeout(runArchivalProcess, 10000); // Run once on startup
+
+    // Health Checker Schedule
+    const HEALTH_CHECK_INTERVAL_MS = 60 * 60 * 1000;
+    console.log(`Starting self-healing health checker. Will run every ${HEALTH_CHECK_INTERVAL_MS / 1000 / 60} minutes.`);
+    // CORRECT: healthService is now correctly in scope
+    setInterval(healthService.runHealthCheck, HEALTH_CHECK_INTERVAL_MS);
+    setTimeout(healthService.runHealthCheck, 30000); // Run once on startup
+});

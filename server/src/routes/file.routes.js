@@ -77,7 +77,6 @@ const {
     uploadFile, 
     downloadFile, 
     getMyFiles, 
-    getDownloadInfo, // <-- NEW
     getGroupMetadata, 
     // downloadGroupAsZip 
 } = require('../controllers/file.controller');
@@ -100,7 +99,6 @@ router.post('/upload', optionalProtect, express.json(), uploadFile);
 // The rest of the routes are unchanged
 router.get('/group-meta/:groupId', getGroupMetadata);
 router.get('/download/:uniqueId', downloadFile);
-// router.get('/download-zip/:groupId', downloadGroupAsZip);
 router.get('/my-files', protect, getMyFiles);
 
 module.exports = router;

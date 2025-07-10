@@ -1204,35 +1204,111 @@
 
 
 
-// server/src/services/telegram.service.js
+// // server/src/services/telegram.service.js
+// const axios = require('axios');
+// const fs = require('fs');
+// const FormData = require('form-data');
+
+// // Get the chat ID, which is the same for all bots.
+// const storageChatId = process.env.TELEGRAM_STORAGE_CHAT_ID;
+
+// // --- MODIFIED: Read the list of all available bot tokens ---
+// const botTokens = (process.env.TELEGRAM_BOT_TOKENS || '').split(',').filter(Boolean);
+
+// if (botTokens.length === 0 || !storageChatId) {
+//     throw new Error("FATAL: Telegram Bot credentials are not fully configured. Please check TELEGRAM_BOT_TOKENS and TELEGRAM_STORAGE_CHAT_ID in your .env file.");
+// }
+
+// /**
+//  * Uploads a file using the Telegram Bot API with a specific token.
+//  * @param {string} localFilePath - The path to the local file to upload.
+//  * @param {string} originalFileName - The name of the file.
+//  * @param {string} botToken - The specific bot token to use for this upload.
+//  * @returns {object} An object containing the messageId and fileId.
+//  */
+// exports.uploadFile = async (localFilePath, originalFileName, botToken) => {
+//     const form = new FormData();
+//     form.append('chat_id', storageChatId);
+//     form.append('document', fs.createReadStream(localFilePath), originalFileName);
+//     form.append('caption', originalFileName);
+
+//     // --- MODIFIED: Use the specific botToken passed to the function ---
+//     const TELEGRAM_API_URL = `https://api.telegram.org/bot${botToken}`;
+
+//     try {
+//         const response = await axios.post(`${TELEGRAM_API_URL}/sendDocument`, form, {
+//             headers: form.getHeaders(),
+//             maxContentLength: Infinity,
+//             maxBodyLength: Infinity,
+//         });
+
+//         if (!response.data.ok) {
+//             throw new Error(`Telegram API Error: ${response.data.description}`);
+//         }
+
+//         const message = response.data.result;
+//         const fileId = message.document.file_id;
+        
+//         return { messageId: message.message_id, fileId: fileId };
+
+//     } catch (error) {
+//         console.error(`Telegram Bot Upload Error for ${originalFileName}:`, error.response ? error.response.data : error.message);
+//         throw error;
+//     }
+// };
+
+// /**
+//  * Gets a file stream using the Telegram Bot API.
+//  * @param {string} fileId - The file_id of the file from a Telegram message.
+//  * @param {string} botToken - The specific bot token that holds the file.
+//  * @returns {ReadableStream} A readable stream of the file content.
+//  */
+// exports.getFileStream = async (fileId, botToken) => {
+//     // --- MODIFIED: Use the specific botToken passed to the function ---
+//     const TELEGRAM_API_URL = `https://api.telegram.org/bot${botToken}`;
+//     try {
+//         // 1. Get the file path from Telegram
+//         const getFileResponse = await axios.get(`${TELEGRAM_API_URL}/getFile`, {
+//             params: { file_id: fileId }
+//         });
+
+//         if (!getFileResponse.data.ok) {
+//             throw new Error(`Telegram getFile Error: ${getFileResponse.data.description}`);
+//         }
+//         const filePath = getFileResponse.data.result.file_path;
+
+//         // 2. Construct the download URL and fetch the file content
+//         const fileUrl = `https://api.telegram.org/file/bot${botToken}/${filePath}`;
+//         const fileResponse = await axios.get(fileUrl, {
+//             responseType: 'stream'
+//         });
+
+//         return fileResponse.data;
+
+//     } catch (error) {
+//         console.error(`Telegram getFileStream Error for fileId ${fileId}:`, error.response ? error.response.data : error.message);
+//         throw error;
+//     }
+// };
+
 const axios = require('axios');
 const fs = require('fs');
 const FormData = require('form-data');
 
-// Get the chat ID, which is the same for all bots.
 const storageChatId = process.env.TELEGRAM_STORAGE_CHAT_ID;
-
-// --- MODIFIED: Read the list of all available bot tokens ---
 const botTokens = (process.env.TELEGRAM_BOT_TOKENS || '').split(',').filter(Boolean);
 
 if (botTokens.length === 0 || !storageChatId) {
     throw new Error("FATAL: Telegram Bot credentials are not fully configured. Please check TELEGRAM_BOT_TOKENS and TELEGRAM_STORAGE_CHAT_ID in your .env file.");
 }
 
-/**
- * Uploads a file using the Telegram Bot API with a specific token.
- * @param {string} localFilePath - The path to the local file to upload.
- * @param {string} originalFileName - The name of the file.
- * @param {string} botToken - The specific bot token to use for this upload.
- * @returns {object} An object containing the messageId and fileId.
- */
-exports.uploadFile = async (localFilePath, originalFileName, botToken) => {
+// Define functions as standalone constants
+const uploadFile = async (localFilePath, originalFileName, botToken) => {
     const form = new FormData();
     form.append('chat_id', storageChatId);
     form.append('document', fs.createReadStream(localFilePath), originalFileName);
     form.append('caption', originalFileName);
 
-    // --- MODIFIED: Use the specific botToken passed to the function ---
     const TELEGRAM_API_URL = `https://api.telegram.org/bot${botToken}`;
 
     try {
@@ -1252,22 +1328,15 @@ exports.uploadFile = async (localFilePath, originalFileName, botToken) => {
         return { messageId: message.message_id, fileId: fileId };
 
     } catch (error) {
+        // Log the error but re-throw it so the caller can handle it
         console.error(`Telegram Bot Upload Error for ${originalFileName}:`, error.response ? error.response.data : error.message);
         throw error;
     }
 };
 
-/**
- * Gets a file stream using the Telegram Bot API.
- * @param {string} fileId - The file_id of the file from a Telegram message.
- * @param {string} botToken - The specific bot token that holds the file.
- * @returns {ReadableStream} A readable stream of the file content.
- */
-exports.getFileStream = async (fileId, botToken) => {
-    // --- MODIFIED: Use the specific botToken passed to the function ---
+const getFileStream = async (fileId, botToken) => {
     const TELEGRAM_API_URL = `https://api.telegram.org/bot${botToken}`;
     try {
-        // 1. Get the file path from Telegram
         const getFileResponse = await axios.get(`${TELEGRAM_API_URL}/getFile`, {
             params: { file_id: fileId }
         });
@@ -1277,7 +1346,6 @@ exports.getFileStream = async (fileId, botToken) => {
         }
         const filePath = getFileResponse.data.result.file_path;
 
-        // 2. Construct the download URL and fetch the file content
         const fileUrl = `https://api.telegram.org/file/bot${botToken}/${filePath}`;
         const fileResponse = await axios.get(fileUrl, {
             responseType: 'stream'
@@ -1289,4 +1357,10 @@ exports.getFileStream = async (fileId, botToken) => {
         console.error(`Telegram getFileStream Error for fileId ${fileId}:`, error.response ? error.response.data : error.message);
         throw error;
     }
+};
+
+// --- FIX: Export a single object at the very end ---
+module.exports = {
+    uploadFile,
+    getFileStream
 };
