@@ -3771,60 +3771,93 @@ async function transferGroupToTelegram(groupId) {
     }
 }
 
-async function getMergedTelegramStream(telegramChunks) {
+// --- THE NEW, RANGE-AWARE TELEGRAM STREAMER ---
+async function getMergedTelegramStream(telegramChunks, range, fileSize) {
     const sortedChunks = telegramChunks.sort((a, b) => a.order - b.order);
     const passThrough = new PassThrough();
 
+    let startByte = 0;
+    let endByte = fileSize - 1;
+
+    if (range) {
+        const parts = range.replace(/bytes=/, "").split("-");
+        startByte = parseInt(parts[0], 10);
+        endByte = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+    }
+
+    // This async function runs in the background, feeding the stream
     (async () => {
+        let bytesSent = 0;
+        let totalBytesProcessed = 0;
+
         for (const chunk of sortedChunks) {
+            const chunkStartByte = totalBytesProcessed;
+            const chunkEndByte = totalBytesProcessed + chunk.size - 1;
+
+            // --- CORE LOGIC: Check if this chunk is needed at all ---
+            // If the chunk is entirely before the requested start range, skip it.
+            if (chunkEndByte < startByte) {
+                totalBytesProcessed += chunk.size;
+                continue;
+            }
+            // If the chunk is entirely after the requested end range, we are done.
+            if (chunkStartByte > endByte) {
+                break;
+            }
+
             let chunkStream = null;
-            let success = false;
-            
-            if (!chunk.locations || chunk.locations.length === 0) {
-                passThrough.emit('error', new Error(`Chunk ${chunk.order} is unrecoverable: no locations stored.`));
-                return;
-            }
-
-            for (const location of chunk.locations) {
-                try {
-                    // --- MODIFIED: Look up token by stable botId ---
-                    const token = botTokenMap.get(location.botId);
-                    if (!token) {
-                        console.warn(`[DOWNLOAD] WARN: Bot with ID '${location.botId}' not found in current config. Replica is inaccessible.`);
-                        continue; // Skip to the next replica
-                    }
-
-                    console.log(`[DOWNLOAD] Fetching chunk ${chunk.order} via bot '${location.botId}'`);
-                    chunkStream = await telegramService.getFileStream(location.fileId, token);
-                    success = true;
-                    console.log(`[DOWNLOAD] Success for chunk ${chunk.order}.`);
-                    break; 
-                } catch (err) {
-                    console.warn(`[DOWNLOAD] WARN: Failed to fetch chunk ${chunk.order} from bot '${location.botId}'. Trying next replica. Error: ${err.message}`);
-                }
-            }
-
-            if (!success || !chunkStream) {
-                passThrough.emit('error', new Error(`Chunk ${chunk.order} is unrecoverable: all replicas failed.`));
-                return;
-            }
-            
+            // ... (The failover logic for getting the stream from a healthy bot remains the same) ...
             try {
-                await new Promise((resolve, reject) => {
-                    chunkStream.pipe(passThrough, { end: false });
-                    chunkStream.on('end', resolve);
-                    chunkStream.on('error', reject);
-                });
-            } catch(pipeError) {
-                 passThrough.emit('error', new Error(`Failed to pipe chunk ${chunk.order}: ${pipeError.message}`));
-                 return;
+                // This part is unchanged: find a healthy replica
+                let success = false;
+                for (const location of chunk.locations) {
+                    const token = botTokenMap.get(location.botId);
+                    if (token) {
+                        try {
+                            chunkStream = await telegramService.getFileStream(location.fileId, token);
+                            success = true;
+                            break;
+                        } catch (e) { /* try next replica */ }
+                    }
+                }
+                if (!success) throw new Error(`All replicas failed for chunk ${chunk.order}`);
+            } catch (err) {
+                passThrough.emit('error', err);
+                return;
             }
+
+            // --- CORE LOGIC: Process the downloaded chunk ---
+            // We have the full stream for the chunk, now we must slice it if necessary.
+            await new Promise((resolve, reject) => {
+                let currentChunkBytesProcessed = 0;
+
+                chunkStream.on('data', (data) => {
+                    const dataStartByte = chunkStartByte + currentChunkBytesProcessed;
+                    const dataEndByte = dataStartByte + data.length - 1;
+                    
+                    // Determine the slice of data that is within the user's requested range
+                    const sliceStart = Math.max(0, startByte - dataStartByte);
+                    const sliceEnd = Math.min(data.length, endByte - dataStartByte + 1);
+
+                    if (sliceStart < sliceEnd) {
+                        passThrough.write(data.slice(sliceStart, sliceEnd));
+                    }
+                    
+                    currentChunkBytesProcessed += data.length;
+                });
+
+                chunkStream.on('end', resolve);
+                chunkStream.on('error', reject);
+            });
+
+            totalBytesProcessed += chunk.size;
         }
         passThrough.end();
     })().catch(err => passThrough.emit('error', err));
     
     return passThrough;
 }
+
 
 
 async function processArchivalQueue() {
@@ -3898,72 +3931,77 @@ const uploadFile = async (req, res, next) => {
     }
 };
 
-// --- THE ROBUST, CRASH-PROOF downloadFile HANDLER ---
+// --- THE FINAL, UNIFIED downloadFile HANDLER ---
 const downloadFile = async (req, res, next) => {
-    res.setTimeout(0); // Disable timeout for long downloads
+    res.setTimeout(0);
     
     try {
         const file = await File.findOne({ uniqueId: req.params.uniqueId });
+        if (!file) return res.status(404).json({ message: 'File not found.' });
+        if (file.status === 'ERROR') return res.status(500).json({ message: 'This file is corrupted.' });
 
-        if (!file) {
-            return res.status(404).json({ message: 'File not found.' });
-        }
-        if (file.status === 'ERROR') {
-            return res.status(500).json({ message: 'This file is corrupted and cannot be downloaded.' });
-        }
-
-        res.setHeader('Content-Disposition', `attachment; filename="${file.originalName}"`);
-        res.setHeader('Content-Length', file.size);
-        res.setHeader('Content-Type', 'application/octet-stream');
+        const fileSize = file.size;
+        const range = req.headers.range;
 
         let fileStream;
-        if (file.status === 'IN_TELEGRAM') {
-            if (!file.telegramChunks || file.telegramChunks.length === 0) { 
-                return res.status(500).json({ message: 'File has no chunk data.' }); 
-            }
-            fileStream = await getMergedTelegramStream(file.telegramChunks);
-        } else if (file.status === 'IN_DRIVE' || file.status === 'ARCHIVING') {
-            fileStream = await gDriveService.getFileStream(file.gDriveFileId);
-        } else {
-            return res.status(500).json({ message: 'File is not in a downloadable state.' });
-        }
 
-        // --- FIX STARTS HERE ---
+        if (range) {
+            // --- A. Handle Range Requests ---
+            const parts = range.replace(/bytes=/, "").split("-");
+            const start = parseInt(parts[0], 10);
+            const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+            const chunksize = (end - start) + 1;
 
-        // 1. Listen for the 'close' event (user cancels/disconnects)
-        req.on('close', () => {
-            console.log(`[DOWNLOAD] Client aborted download for file ${file.uniqueId}. Cleaning up stream.`);
-            // Destroy the source stream to stop fetching data from Telegram/G-Drive
-            if (fileStream && typeof fileStream.destroy === 'function') {
-                fileStream.destroy();
+            if (start >= fileSize) {
+                return res.status(416).send('Requested range not satisfiable');
             }
-        });
 
-        // 2. Handle errors from the source stream
-        fileStream.on('error', (err) => {
-            // Check if the error was caused by the client aborting.
-            // Node.js streams often emit an 'aborted' error in this case.
-            if (err.code === 'ERR_STREAM_PREMATURE_CLOSE' || err.message.includes('aborted')) {
-                // This is an expected error when the client disconnects. Log it but don't crash.
-                console.log(`[DOWNLOAD] Stream for ${file.uniqueId} was gracefully aborted.`);
-            } else {
-                // This is an unexpected server-side error.
-                console.error(`STREAMING ERROR for file ${file.uniqueId}:`, err.message);
-            }
+            res.writeHead(206, { // 206 Partial Content
+                'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+                'Accept-Ranges': 'bytes',
+                'Content-Length': chunksize,
+                'Content-Type': 'application/octet-stream',
+                'Content-Disposition': `attachment; filename="${file.originalName}"`,
+            });
             
-            // We don't try to send a response here because the connection is likely already closed.
-            // We just ensure the server doesn't crash.
-        });
+            if (file.status === 'IN_DRIVE' || file.status === 'ARCHIVING') {
+                // Google Drive natively supports ranges
+                fileStream = await gDriveService.getPartialFileStream(file.gDriveFileId, { start, end });
+            } else if (file.status === 'IN_TELEGRAM') {
+                // Our new function simulates range support for Telegram
+                fileStream = await getMergedTelegramStream(file.telegramChunks, range, fileSize);
+            } else {
+                return res.end(); // Should not happen, but good practice
+            }
 
-        // 3. Pipe the stream to the response
+        } else {
+            // --- B. Handle Full File Downloads ---
+            res.writeHead(200, { // 200 OK
+                'Content-Length': fileSize,
+                'Content-Type': 'application/octet-stream',
+                'Content-Disposition': `attachment; filename="${file.originalName}"`,
+                'Accept-Ranges': 'bytes'
+            });
+
+            if (file.status === 'IN_DRIVE' || file.status === 'ARCHIVING') {
+                fileStream = await gDriveService.getFileStream(file.gDriveFileId);
+            } else if (file.status === 'IN_TELEGRAM') {
+                fileStream = await getMergedTelegramStream(file.telegramChunks, null, fileSize);
+            } else {
+                 return res.end();
+            }
+        }
+        
+        // Universal stream handling for both cases
+        req.on('close', () => { if(fileStream?.destroy) fileStream.destroy(); });
+        fileStream.on('error', (err) => {
+            console.error(`STREAM ERROR for ${file.uniqueId}:`, err);
+            if (!res.headersSent) res.status(500).end();
+        });
         fileStream.pipe(res);
 
-        // --- FIX ENDS HERE ---
-
     } catch (error) {
-        // This catches errors that happen BEFORE streaming starts (e.g., DB query fails)
-        console.error(`PRE-STREAM ERROR for file ${req.params.uniqueId}:`, error);
-        next(error); // Pass to global error handler
+        next(error);
     }
 };
 

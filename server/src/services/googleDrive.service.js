@@ -744,3 +744,18 @@ exports.listAllFiles = async () => {
   });
   return response.data.files || [];
 };
+
+
+// --- NEW FUNCTION for Resumable Downloads ---
+exports.getPartialFileStream = async (fileId, { start, end }) => {
+    const drive = google.drive({ version: 'v3', auth: oAuth2Client });
+    const response = await drive.files.get(
+        { fileId, alt: 'media', supportsAllDrives: true },
+        { 
+            headers: { 'Range': `bytes=${start}-${end}` },
+            responseType: 'stream', 
+            timeout: 120 * 60 * 1000 
+        }
+    );
+    return response.data;
+};
