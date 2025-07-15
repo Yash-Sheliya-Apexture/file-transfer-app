@@ -220,6 +220,8 @@
 
 // module.exports = mongoose.model('File', FileSchema);
 
+
+// server/src/models/File.js
 const mongoose = require('mongoose');
 const { v4: uuidv4 } = require('uuid');
 
@@ -247,6 +249,7 @@ const FileSchema = new mongoose.Schema({
             botId: { type: String, required: true },
             messageId: { type: Number, required:true },
             fileId: { type: String, required: true },
+            channelId: { type: Number, required: true }, // ✅ Added this field
         }]
     }],
 

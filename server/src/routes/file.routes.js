@@ -100,5 +100,5 @@ router.post('/upload', optionalProtect, express.json(), uploadFile);
 router.get('/group-meta/:groupId', getGroupMetadata);
 router.get('/download/:uniqueId', downloadFile);
 router.get('/my-files', protect, getMyFiles);
-
+// router.get('/download-zip/:groupId', downloadGroupAsZip); // Add this
 module.exports = router;

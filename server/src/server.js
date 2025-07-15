@@ -1219,6 +1219,7 @@ const defaultAllowedOrigins = 'http://localhost:3000,https://file-transfer-app-o
 const allowedOriginsEnv = process.env.ALLOWED_ORIGINS || defaultAllowedOrigins;
 const allowedOrigins = allowedOriginsEnv.split(',').map(origin => origin.trim()).filter(Boolean);
 console.log("Allowed CORS Origins:", allowedOrigins);
+// ✅ UPDATED CORS OPTIONS
 const corsOptions = {
     origin: (origin, callback) => {
         if (!origin || allowedOrigins.includes(origin)) {
@@ -1229,7 +1230,10 @@ const corsOptions = {
         }
     },
     credentials: true,
+    // This new line tells the browser that it's safe to access the redirect location
+    exposedHeaders: ['Location'],
 };
+
 
 // --- Middleware ---
 app.use(cors(corsOptions));
@@ -1243,15 +1247,54 @@ app.use(errorMiddleware);
 
 
 // --- Define Background Job Functions ---
+// async function runArchivalProcess() {
+//     console.log('ARCHIVAL JANITOR: Running job to find work...');
+//     const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+
+//     try {
+//         const archivableGroups = await File.aggregate([
+//             { $match: { status: 'IN_DRIVE', driveUploadTimestamp: { $ne: null }, archiveAttempts: { $lt: 3 } } },
+//             { $group: { _id: '$groupId', countInDrive: { $sum: 1 }, groupTotal: { $first: '$groupTotal' }, lastUploadTime: { $max: '$driveUploadTimestamp' } } },
+//             { $match: { $expr: { $eq: ['$countInDrive', '$groupTotal'] }, lastUploadTime: { $lte: fiveMinutesAgo } } }
+//         ]);
+
+//         if (archivableGroups.length === 0) {
+//             console.log('ARCHIVAL JANITOR: No new complete groups are old enough to archive.');
+//             return;
+//         }
+
+//         console.log(`ARCHIVAL JANITOR: Found ${archivableGroups.length} group(s) to schedule.`);
+//         for (const group of archivableGroups) {
+//             scheduleGroupForArchival(group._id);
+//         }
+//     } catch (error) {
+//         console.error('ARCHIVAL JANITOR: Error during group identification:', error);
+//     }
+//     console.log('ARCHIVAL JANITOR: Job finished.');
+// }
+
 async function runArchivalProcess() {
     console.log('ARCHIVAL JANITOR: Running job to find work...');
     const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
 
     try {
+        // ✅ This query now correctly ignores groups that are already being processed.
         const archivableGroups = await File.aggregate([
-            { $match: { status: 'IN_DRIVE', driveUploadTimestamp: { $ne: null }, archiveAttempts: { $lt: 3 } } },
-            { $group: { _id: '$groupId', countInDrive: { $sum: 1 }, groupTotal: { $first: '$groupTotal' }, lastUploadTime: { $max: '$driveUploadTimestamp' } } },
-            { $match: { $expr: { $eq: ['$countInDrive', '$groupTotal'] }, lastUploadTime: { $lte: fiveMinutesAgo } } }
+            { $match: { 
+                status: 'IN_DRIVE', // Only find groups where files are still in drive
+                driveUploadTimestamp: { $ne: null }, 
+                archiveAttempts: { $lt: 3 } 
+            }},
+            { $group: { 
+                _id: '$groupId', 
+                countInDrive: { $sum: 1 }, 
+                groupTotal: { $first: '$groupTotal' }, 
+                lastUploadTime: { $max: '$driveUploadTimestamp' } 
+            }},
+            { $match: { 
+                $expr: { $eq: ['$countInDrive', '$groupTotal'] }, 
+                lastUploadTime: { $lte: fiveMinutesAgo } 
+            }}
         ]);
 
         if (archivableGroups.length === 0) {
@@ -1259,8 +1302,10 @@ async function runArchivalProcess() {
             return;
         }
 
-        console.log(`ARCHIVAL JANITOR: Found ${archivableGroups.length} group(s) to schedule.`);
+        console.log(`ARCHIVAL JANITOR: Found ${archivableGroups.length} group(s) to schedule for archival.`);
         for (const group of archivableGroups) {
+            // First, mark the entire group as 'ARCHIVING' to prevent it from being picked up again.
+            await File.updateMany({ groupId: group._id, status: 'IN_DRIVE' }, { $set: { status: 'ARCHIVING' } });
             scheduleGroupForArchival(group._id);
         }
     } catch (error) {
@@ -1268,7 +1313,6 @@ async function runArchivalProcess() {
     }
     console.log('ARCHIVAL JANITOR: Job finished.');
 }
-
 
 // --- Server Initialization and Job Scheduling ---
 const PORT = process.env.PORT || 5000;

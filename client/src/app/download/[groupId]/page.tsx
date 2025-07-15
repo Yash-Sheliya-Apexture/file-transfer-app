@@ -1820,17 +1820,654 @@
 //     );
 // }
 
+
+// // client/src/app/download/[groupId]/page.tsx
+// "use client";
+
+// import { useEffect, useState } from 'react';
+// import { Button } from "@/components/ui/button";
+// import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+// import { Progress } from "@/components/ui/progress";
+// import { formatBytes } from "@/utils/format";
+// import { Download, File as FileIcon, Loader2, Package, AlertTriangle, XCircle } from "lucide-react";
+// import { toast } from "sonner";
+// import { usePathname } from 'next/navigation';
+// import { Zip, ZipPassThrough } from 'fflate'; 
+// import { saveAs } from 'file-saver';
+
+// interface FileMetadata {
+//     originalName: string;
+//     size: number;
+//     uniqueId: string;
+//     thumbnail: string | null;
+// }
+
+// interface ZipProgressState {
+//     totalFiles: number;
+//     completedFiles: number;
+//     currentFileName: string;
+//     overallPercentage: number;
+//     currentFilePercentage: number;
+// }
+
+// export default function DownloadGroupPage() {
+//     const pathname = usePathname();
+//     const groupId = pathname.split('/').pop();
+
+//     const [files, setFiles] = useState<FileMetadata[]>([]);
+//     const [isLoading, setIsLoading] = useState(true);
+//     const [error, setError] = useState<string | null>();
+    
+//     const [isZipping, setIsZipping] = useState(false);
+//     const [zipProgress, setZipProgress] = useState<ZipProgressState>({
+//         totalFiles: 0, completedFiles: 0, currentFileName: '', overallPercentage: 0, currentFilePercentage: 0
+//     });
+//     const [abortController, setAbortController] = useState<AbortController | null>(null);
+
+//     // --- FIX: Get the backend URL directly from environment variables ---
+//     const backendApiUrl = process.env.NEXT_PUBLIC_API_URL;
+
+//     useEffect(() => {
+//         if (!groupId) {
+//             setError("Group ID is missing.");
+//             setIsLoading(false);
+//             return;
+//         }
+//         // Use the local API proxy for metadata, as it's a fast request and avoids CORS issues if any.
+//         const fetchGroupMetadata = async () => {
+//             setIsLoading(true);
+//             try {
+//                 const res = await fetch(`/api/files/group-meta/${groupId}`); // This can still use the proxy
+//                 if (!res.ok) {
+//                     const errorData = await res.json().catch(() => ({ message: "File group not found or has expired." }));
+//                     throw new Error(errorData.message);
+//                 }
+//                 const data: FileMetadata[] = await res.json();
+//                 if (data.length === 0) {
+//                     throw new Error("This link is valid, but contains no files.");
+//                 }
+//                 setFiles(data);
+//             } catch (err) {
+//                 const error = err as Error;
+//                 setError(error.message);
+//             } finally {
+//                 setIsLoading(false);
+//             }
+//         };
+//         fetchGroupMetadata();
+//     }, [groupId]);
+
+//     const handleDownload = (file: FileMetadata) => {
+//         // --- FIX: Point the download directly to the EC2 backend ---
+//         if (!backendApiUrl) { 
+//             toast.error("Backend API URL is not configured. Cannot start download."); 
+//             return; 
+//         }
+//         try {
+//             toast.info(`Your download for ${file.originalName} has started.`);
+            
+//             // Construct the URL to point DIRECTLY to the EC2 backend API
+//             const downloadUrl = `${backendApiUrl}/files/download/${file.uniqueId}`;
+            
+//             // We use a link to initiate the download, as this is the standard browser behavior
+//             const link = document.createElement('a');
+//             link.href = downloadUrl;
+//             // The 'download' attribute is a hint, but the Content-Disposition header from the server is what matters
+//             link.setAttribute('download', file.originalName); 
+//             document.body.appendChild(link);
+//             link.click();
+//             document.body.removeChild(link);
+            
+//         } catch (err) {
+//             const error = err as Error;
+//             toast.error(`Failed to start download for ${file.originalName}`, { description: error.message });
+//         }
+//     };
+    
+//     const handleCancelZip = () => {
+//         if (abortController) {
+//             abortController.abort();
+//             toast.warning("Download All operation has been cancelled.");
+//         }
+//         setIsZipping(false);
+//     };
+
+//     const handleDownloadAllAsZip = async () => {
+//         if (files.length === 0 || isZipping || !backendApiUrl) return;
+
+//         setIsZipping(true);
+//         const controller = new AbortController();
+//         setAbortController(controller);
+
+//         const zip = new Zip();
+//         const zipFileName = `${files[0].originalName.split('.')[0] || 'archive'}.zip`;
+        
+//         const zipChunks: Uint8Array[] = [];
+//         zip.ondata = (err, data, final) => {
+//             if (err) {
+//                 setIsZipping(false);
+//                 toast.error("Error during zipping", { description: err.message });
+//                 throw err;
+//             }
+//             zipChunks.push(data);
+//             if (final) {
+//                 const zipBlob = new Blob(zipChunks, { type: 'application/zip' });
+//                 saveAs(zipBlob, zipFileName);
+//                 setIsZipping(false);
+//                 toast.success("ZIP file created successfully!");
+//             }
+//         };
+
+//         toast.info("Starting download and zip process...");
+
+//         try {
+//             for (let i = 0; i < files.length; i++) {
+//                 const file = files[i];
+                
+//                 setZipProgress({
+//                     totalFiles: files.length,
+//                     completedFiles: i,
+//                     currentFileName: file.originalName,
+//                     overallPercentage: Math.round((i / files.length) * 100),
+//                     currentFilePercentage: 0,
+//                 });
+
+//                 // --- FIX: Point the download for zipping directly to the EC2 backend ---
+//                 const downloadUrl = `${backendApiUrl}/files/download/${file.uniqueId}`;
+//                 const response = await fetch(downloadUrl, { signal: controller.signal });
+
+//                 if (!response.ok || !response.body) {
+//                     throw new Error(`Failed to start download for ${file.originalName}`);
+//                 }
+                
+//                 const fileStream = new ZipPassThrough(file.originalName);
+//                 fileStream.mtime = new Date();
+//                 zip.add(fileStream);
+
+//                 const reader = response.body.getReader();
+//                 let downloadedBytes = 0;
+                
+//                 while (true) {
+//                     const { done, value } = await reader.read();
+//                     if (done) break;
+                    
+//                     fileStream.push(value);
+//                     downloadedBytes += value.length;
+
+//                     setZipProgress(currentProgress => ({
+//                         ...currentProgress,
+//                         currentFilePercentage: (downloadedBytes / file.size) * 100,
+//                     }));
+//                 }
+                
+//                 fileStream.push(new Uint8Array(0), true);
+//             }
+            
+//             setZipProgress(currentProgress => ({ ...currentProgress, completedFiles: files.length, overallPercentage: 100, currentFilePercentage: 100 }));
+//             zip.end();
+
+//         } catch (err) {
+//             if ((err as Error).name !== 'AbortError') {
+//                 toast.error("Download failed", { description: (err as Error).message });
+//             }
+//             setIsZipping(false);
+//         }
+//     };
+
+//     // The rest of the JSX rendering remains the same, as it calls these updated handlers.
+//     return (
+//         <div className="flex min-h-screen items-center justify-center bg-gray-50 dark:bg-gray-900 p-4">
+//             <Card className="w-full max-w-lg">
+//                 {error ? (
+//                      <CardHeader>
+//                         <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-red-100">
+//                             <AlertTriangle className="h-6 w-6 text-red-600" />
+//                         </div>
+//                         <CardTitle className="mt-4 text-center text-destructive">Download Unavailable</CardTitle>
+//                         <CardDescription className="text-center">{error}</CardDescription>
+//                     </CardHeader>
+//                 ) : (
+//                     <>
+//                         <CardHeader>
+//                             <CardTitle className="flex items-center gap-2 text-2xl"><Package size={28} /> File Batch Ready</CardTitle>
+//                             {isLoading ? (<CardDescription>Fetching file details...</CardDescription>) : (
+//                                 <CardDescription>This link contains {files.length} file(s) with a total size of {formatBytes(files.reduce((acc, file) => acc + file.size, 0))}.</CardDescription>
+//                             )}
+//                         </CardHeader>
+//                         <CardContent className="space-y-4">
+//                             {isLoading ? (
+//                                 <div className="flex justify-center items-center h-48"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>
+//                             ) : (
+//                                 <>
+//                                     <div className="space-y-2 max-h-72 overflow-y-auto rounded-md border p-2">
+//                                         {files.map(file => (
+//                                             <div key={file.uniqueId} className="flex items-center justify-between p-2 hover:bg-muted/50 rounded-md transition-colors">
+//                                                 <div className="flex items-center gap-3 overflow-hidden">
+//                                                      {file.thumbnail ? (<img src={`data:image/jpeg;base64,${file.thumbnail}`} alt="preview" className="h-10 w-10 flex-shrink-0 rounded-sm object-cover bg-gray-200" />) : (
+//                                                         <div className="h-10 w-10 flex-shrink-0 rounded-sm bg-gray-100 flex items-center justify-center"><FileIcon className="h-5 w-5 text-gray-500" /></div>
+//                                                      )}
+//                                                     <div className='overflow-hidden'>
+//                                                         <p className="font-medium text-sm truncate" title={file.originalName}>{file.originalName}</p>
+//                                                         <p className="text-xs text-muted-foreground">{formatBytes(file.size)}</p>
+//                                                     </div>
+//                                                 </div>
+//                                                 <Button size="sm" variant="ghost" onClick={() => handleDownload(file)} disabled={isZipping}><Download className="h-4 w-4" /></Button>
+//                                             </div>
+//                                         ))}
+//                                     </div>
+                                    
+//                                     {files.length > 1 && (
+//                                         <>
+//                                             {isZipping ? (
+//                                                 <div className="p-4 border rounded-lg bg-muted/50 space-y-3">
+//                                                     <div className="flex justify-between items-center">
+//                                                         <p className="font-semibold text-sm">Processing Files...</p>
+//                                                         <Button variant="ghost" size="sm" onClick={handleCancelZip}><XCircle className="h-4 w-4 mr-2" />Cancel</Button>
+//                                                     </div>
+//                                                     <div className='space-y-1'>
+//                                                         <p className='text-xs font-medium text-muted-foreground'>Overall Progress ({zipProgress.completedFiles} / {zipProgress.totalFiles})</p>
+//                                                         <Progress value={zipProgress.overallPercentage} />
+//                                                     </div>
+//                                                     <div className='space-y-1'>
+//                                                         <p className="text-xs font-medium text-muted-foreground truncate" title={zipProgress.currentFileName}>Current: {zipProgress.currentFileName}</p>
+//                                                         <Progress value={zipProgress.currentFilePercentage} className="h-1.5" />
+//                                                     </div>
+//                                                 </div>
+//                                             ) : (
+//                                                 <Button className="w-full h-12 text-md" onClick={handleDownloadAllAsZip}><Package className="mr-2 h-5 w-5" />Download All as .ZIP</Button>
+//                                             )}
+//                                         </>
+//                                     )}
+//                                 </>
+//                             )}
+//                         </CardContent>
+//                     </>
+//                 )}
+//             </Card>
+//         </div>
+//     );
+// }
+
+// "use client";
+
+// import { useEffect, useState } from 'react';
+// import { Button } from "@/components/ui/button";
+// import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+// import { formatBytes } from "@/utils/format";
+// import { Download, File as FileIcon, Loader2, Package, AlertTriangle } from "lucide-react";
+// import { toast } from "sonner";
+// import { usePathname } from 'next/navigation';
+
+// interface FileMetadata {
+//     originalName: string;
+//     size: number;
+//     uniqueId: string;
+//     thumbnail: string | null;
+// }
+
+// export default function DownloadGroupPage() {
+//     const pathname = usePathname();
+//     const groupId = pathname.split('/').pop();
+
+//     const [files, setFiles] = useState<FileMetadata[]>([]);
+//     const [isLoading, setIsLoading] = useState(true);
+//     const [error, setError] = useState<string | null>();
+
+//     const backendApiUrl = process.env.NEXT_PUBLIC_API_URL;
+
+//     useEffect(() => {
+//         if (!groupId) {
+//             setError("Group ID is missing.");
+//             setIsLoading(false);
+//             return;
+//         }
+
+//         const fetchGroupMetadata = async () => {
+//             setIsLoading(true);
+//             try {
+//                 // Use the local API proxy to get file metadata
+//                 const res = await fetch(`/api/files/group-meta/${groupId}`);
+//                 if (!res.ok) {
+//                     const errorData = await res.json().catch(() => ({ message: "File group not found or has expired." }));
+//                     throw new Error(errorData.message);
+//                 }
+//                 const data: FileMetadata[] = await res.json();
+//                 if (data.length === 0) {
+//                     throw new Error("This link is valid, but contains no files.");
+//                 }
+//                 setFiles(data);
+//             } catch (err) {
+//                 const error = err as Error;
+//                 setError(error.message);
+//             } finally {
+//                 setIsLoading(false);
+//             }
+//         };
+//         fetchGroupMetadata();
+//     }, [groupId]);
+
+//     const handleDownload = (file: FileMetadata) => {
+//         if (!backendApiUrl) {
+//             toast.error("Backend API URL is not configured. Cannot start download.");
+//             return;
+//         }
+//         try {
+//             toast.info(`Your download for ${file.originalName} has started.`);
+
+//             // This URL points to our server, which will REDIRECT to the Cloudflare Worker.
+//             // The browser handles this redirect automatically.
+//             const downloadUrl = `${backendApiUrl}/files/download/${file.uniqueId}`;
+
+//             const link = document.createElement('a');
+//             link.href = downloadUrl;
+//             // The 'download' attribute is a hint, but the server's Content-Disposition header is what matters.
+//             link.setAttribute('download', file.originalName);
+//             document.body.appendChild(link);
+//             link.click();
+//             document.body.removeChild(link);
+
+//         } catch (err) {
+//             const error = err as Error;
+//             toast.error(`Failed to start download for ${file.originalName}`, { description: error.message });
+//         }
+//     };
+
+//     const handleDownloadAll = () => {
+//         if (files.length === 0) return;
+//         toast.info(`Starting download for ${files.length} files. Your browser may ask for permission for multiple downloads.`);
+        
+//         files.forEach((file, index) => {
+//             // Stagger the downloads slightly to prevent the browser from blocking them as popups
+//             setTimeout(() => {
+//                 handleDownload(file);
+//             }, index * 400); // 400ms delay between each download
+//         });
+//     };
+
+//     return (
+//         <div className="flex min-h-screen items-center justify-center bg-gray-50 dark:bg-gray-900 p-4">
+//             <Card className="w-full max-w-lg">
+//                 {error ? (
+//                     <CardHeader>
+//                         <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-red-100">
+//                             <AlertTriangle className="h-6 w-6 text-red-600" />
+//                         </div>
+//                         <CardTitle className="mt-4 text-center text-destructive">Download Unavailable</CardTitle>
+//                         <CardDescription className="text-center">{error}</CardDescription>
+//                     </CardHeader>
+//                 ) : (
+//                     <>
+//                         <CardHeader>
+//                             <CardTitle className="flex items-center gap-2 text-2xl"><Package size={28} /> File Batch Ready</CardTitle>
+//                             {isLoading ? (<CardDescription>Fetching file details...</CardDescription>) : (
+//                                 <CardDescription>This link contains {files.length} file(s) with a total size of {formatBytes(files.reduce((acc, file) => acc + file.size, 0))}.</CardDescription>
+//                             )}
+//                         </CardHeader>
+//                         <CardContent className="space-y-4">
+//                             {isLoading ? (
+//                                 <div className="flex justify-center items-center h-48"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>
+//                             ) : (
+//                                 <>
+//                                     <div className="space-y-2 max-h-72 overflow-y-auto rounded-md border p-2">
+//                                         {files.map(file => (
+//                                             <div key={file.uniqueId} className="flex items-center justify-between p-2 hover:bg-muted/50 rounded-md transition-colors">
+//                                                 <div className="flex items-center gap-3 overflow-hidden">
+//                                                     {file.thumbnail ? (<img src={`data:image/jpeg;base64,${file.thumbnail}`} alt="preview" className="h-10 w-10 flex-shrink-0 rounded-sm object-cover bg-gray-200" />) : (
+//                                                         <div className="h-10 w-10 flex-shrink-0 rounded-sm bg-gray-100 flex items-center justify-center"><FileIcon className="h-5 w-5 text-gray-500" /></div>
+//                                                     )}
+//                                                     <div className='overflow-hidden'>
+//                                                         <p className="font-medium text-sm truncate" title={file.originalName}>{file.originalName}</p>
+//                                                         <p className="text-xs text-muted-foreground">{formatBytes(file.size)}</p>
+//                                                     </div>
+//                                                 </div>
+//                                                 <Button size="sm" variant="ghost" onClick={() => handleDownload(file)}><Download className="h-4 w-4" /></Button>
+//                                             </div>
+//                                         ))}
+//                                     </div>
+                                    
+//                                     {files.length > 1 && (
+//                                         <Button className="w-full h-12 text-md" onClick={handleDownloadAll}>
+//                                             <Download className="mr-2 h-5 w-5" />
+//                                             Download All Files
+//                                         </Button>
+//                                     )}
+//                                 </>
+//                             )}
+//                         </CardContent>
+//                     </>
+//                 )}
+//             </Card>
+//         </div>
+//     );
+// }
+
+// "use client";
+// import { useEffect, useState } from 'react';
+// import { Button } from "@/components/ui/button";
+// import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+// import { formatBytes } from "@/utils/format";
+// import { Download, File as FileIcon, Loader2, Package, AlertTriangle, Hourglass } from "lucide-react";
+// import { toast } from "sonner";
+// import { usePathname } from 'next/navigation';
+// import { saveAs } from 'file-saver';
+
+// interface FileMetadata { originalName: string; size: number; uniqueId: string; thumbnail: string | null }
+
+// export default function DownloadGroupPage() {
+//     const pathname = usePathname();
+//     const groupId = pathname.split('/').pop();
+//     const [files, setFiles] = useState<FileMetadata[]>([]);
+//     const [isLoading, setIsLoading] = useState(true);
+//     const [error, setError] = useState<string | null>();
+//     const [isDownloading, setIsDownloading] = useState<string | null>(null);
+//     const backendApiUrl = process.env.NEXT_PUBLIC_API_URL;
+
+//     useEffect(() => {
+//         if (!groupId) { setError("Group ID is missing."); setIsLoading(false); return; }
+//         const fetchGroupMetadata = async () => {
+//             setIsLoading(true);
+//             try {
+//                 const res = await fetch(`/api/files/group-meta/${groupId}`);
+//                 if (!res.ok) { const errorData = await res.json().catch(() => ({ message: "File group not found or has expired." })); throw new Error(errorData.message); }
+//                 const data: FileMetadata[] = await res.json();
+//                 if (data.length === 0) throw new Error("This link is valid, but contains no files.");
+//                 setFiles(data);
+//             } catch (err) { setError((err as Error).message); }
+//             finally { setIsLoading(false); }
+//         };
+//         fetchGroupMetadata();
+//     }, [groupId]);
+
+//     const handleDownload = async (file: FileMetadata) => {
+//         if (!backendApiUrl) { toast.error("Backend API URL is not configured."); return; }
+//         setIsDownloading(file.uniqueId);
+//         const downloadToast = toast.loading(`Preparing download for ${file.originalName}...`);
+//         try {
+//             const downloadUrl = `${backendApiUrl}/files/download/${file.uniqueId}`;
+//             const response = await fetch(downloadUrl);
+//             if (response.ok) {
+//                 toast.success(`Download starting for ${file.originalName}`, { id: downloadToast });
+//                 const blob = await response.blob();
+//                 saveAs(blob, file.originalName);
+//             } else {
+//                 const errorData = await response.json();
+//                 toast.error(errorData.message || 'Could not start download.', { id: downloadToast });
+//             }
+//         } catch (err) { toast.error('An unexpected error occurred.', { id: downloadToast, description: (err as Error).message }); }
+//         finally { setIsDownloading(null); }
+//     };
+
+//     return (
+//         <div className="flex min-h-screen items-center justify-center bg-gray-50 p-4">
+//             <Card className="w-full max-w-lg">
+//                 {error ? (
+//                     <CardHeader><div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-red-100"><AlertTriangle className="h-6 w-6 text-red-600" /></div><CardTitle className="mt-4 text-center text-destructive">Download Unavailable</CardTitle><CardDescription className="text-center">{error}</CardDescription></CardHeader>
+//                 ) : (
+//                     <>
+//                         <CardHeader><CardTitle className="flex items-center gap-2 text-2xl"><Package size={28} /> File Batch Ready</CardTitle>{isLoading ? (<CardDescription>Fetching file details...</CardDescription>) : (<CardDescription>This link contains {files.length} file(s) with a total size of {formatBytes(files.reduce((acc, f) => acc + f.size, 0))}.</CardDescription>)}</CardHeader>
+//                         <CardContent>{isLoading ? (<div className="flex justify-center items-center h-48"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>) : (<div className="space-y-2 max-h-72 overflow-y-auto rounded-md border p-2">{files.map(file => (<div key={file.uniqueId} className="flex items-center justify-between p-2 hover:bg-muted/50 rounded-md"><div className="flex items-center gap-3 overflow-hidden"><div className="h-10 w-10 flex-shrink-0 rounded-sm bg-gray-100 flex items-center justify-center"><FileIcon className="h-5 w-5 text-gray-500" /></div><div className='overflow-hidden'><p className="font-medium text-sm truncate" title={file.originalName}>{file.originalName}</p><p className="text-xs text-muted-foreground">{formatBytes(file.size)}</p></div></div><Button size="sm" variant="ghost" onClick={() => handleDownload(file)} disabled={!!isDownloading}>{isDownloading === file.uniqueId ? <Hourglass className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}</Button></div>))}</div>)}</CardContent>
+//                     </>
+//                 )}
+//             </Card>
+//         </div>
+//     );
+// }
+
+
+// "use client";
+
+// import { useEffect, useState } from 'react';
+// import { Button } from "@/components/ui/button";
+// import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+// import { formatBytes } from "@/utils/format";
+// import { Download, File as FileIcon, Loader2, Package, AlertTriangle, Hourglass } from "lucide-react";
+// import { toast } from "sonner";
+// import { usePathname } from 'next/navigation';
+// import { saveAs } from 'file-saver';
+
+// interface FileMetadata {
+//     originalName: string;
+//     size: number;
+//     uniqueId: string;
+//     thumbnail: string | null;
+// }
+
+// export default function DownloadGroupPage() {
+//     const pathname = usePathname();
+//     const groupId = pathname.split('/').pop();
+
+//     const [files, setFiles] = useState<FileMetadata[]>([]);
+//     const [isLoading, setIsLoading] = useState(true);
+//     const [error, setError] = useState<string | null>();
+//     const [isDownloading, setIsDownloading] = useState<string | null>(null); // Track which file is downloading
+
+//     const backendApiUrl = process.env.NEXT_PUBLIC_API_URL;
+
+//     useEffect(() => {
+//         if (!groupId) {
+//             setError("Group ID is missing.");
+//             setIsLoading(false);
+//             return;
+//         }
+        
+//         const fetchGroupMetadata = async () => {
+//             setIsLoading(true);
+//             try {
+//                 // Use the local API proxy to get file metadata, avoiding CORS issues.
+//                 const res = await fetch(`/api/files/group-meta/${groupId}`);
+//                 if (!res.ok) {
+//                     const errorData = await res.json().catch(() => ({ message: "File group not found or has expired." }));
+//                     throw new Error(errorData.message);
+//                 }
+//                 const data: FileMetadata[] = await res.json();
+//                 if (data.length === 0) {
+//                     throw new Error("This link is valid, but contains no files.");
+//                 }
+//                 setFiles(data);
+//             } catch (err) {
+//                 setError((err as Error).message);
+//             } finally {
+//                 setIsLoading(false);
+//             }
+//         };
+
+//         fetchGroupMetadata();
+//     }, [groupId]);
+
+//     const handleDownload = async (file: FileMetadata) => {
+//         if (!backendApiUrl) {
+//             toast.error("Backend API URL is not configured.");
+//             return;
+//         }
+        
+//         setIsDownloading(file.uniqueId);
+//         const downloadToast = toast.loading(`Preparing download for ${file.originalName}...`);
+        
+//         try {
+//             // This URL points to our server, which will either stream the file
+//             // directly or redirect to the high-speed Cloudflare Worker.
+//             const downloadUrl = `${backendApiUrl}/files/download/${file.uniqueId}`;
+            
+//             // We use fetch to handle the response intelligently.
+//             const response = await fetch(downloadUrl);
+
+//             // If the response is OK, it's a file stream.
+//             if (response.ok) {
+//                 toast.success(`Download starting for ${file.originalName}`, { id: downloadToast });
+//                 const blob = await response.blob();
+//                 saveAs(blob, file.originalName);
+//             } else {
+//                 // If not OK, the server sent an error message (e.g., "file processing").
+//                 const errorData = await response.json();
+//                 toast.error(errorData.message || 'Could not start download.', { id: downloadToast });
+//             }
+//         } catch (err) {
+//             toast.error('An unexpected error occurred.', { id: downloadToast, description: (err as Error).message });
+//         } finally {
+//             setIsDownloading(null);
+//         }
+//     };
+
+//     return (
+//         <div className="flex min-h-screen items-center justify-center bg-gray-50 p-4">
+//             <Card className="w-full max-w-lg">
+//                 {error ? (
+//                     <CardHeader>
+//                         <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-red-100">
+//                             <AlertTriangle className="h-6 w-6 text-red-600" />
+//                         </div>
+//                         <CardTitle className="mt-4 text-center text-destructive">Download Unavailable</CardTitle>
+//                         <CardDescription className="text-center">{error}</CardDescription>
+//                     </CardHeader>
+//                 ) : (
+//                     <>
+//                         <CardHeader>
+//                             <CardTitle className="flex items-center gap-2 text-2xl"><Package size={28} /> File Batch Ready</CardTitle>
+//                             {isLoading ? (
+//                                 <CardDescription>Fetching file details...</CardDescription>
+//                             ) : (
+//                                 <CardDescription>This link contains {files.length} file(s) with a total size of {formatBytes(files.reduce((acc, f) => acc + f.size, 0))}.</CardDescription>
+//                             )}
+//                         </CardHeader>
+//                         <CardContent>
+//                             {isLoading ? (
+//                                 <div className="flex justify-center items-center h-48"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>
+//                             ) : (
+//                                 <div className="space-y-2 max-h-72 overflow-y-auto rounded-md border p-2">
+//                                     {files.map(file => (
+//                                         <div key={file.uniqueId} className="flex items-center justify-between p-2 hover:bg-muted/50 rounded-md transition-colors">
+//                                             <div className="flex items-center gap-3 overflow-hidden">
+//                                                 <div className="h-10 w-10 flex-shrink-0 rounded-sm bg-gray-100 flex items-center justify-center"><FileIcon className="h-5 w-5 text-gray-500" /></div>
+//                                                 <div className='overflow-hidden'>
+//                                                     <p className="font-medium text-sm truncate" title={file.originalName}>{file.originalName}</p>
+//                                                     <p className="text-xs text-muted-foreground">{formatBytes(file.size)}</p>
+//                                                 </div>
+//                                             </div>
+//                                             <Button size="sm" variant="ghost" onClick={() => handleDownload(file)} disabled={!!isDownloading}>
+//                                                 {isDownloading === file.uniqueId ? <Hourglass className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+//                                             </Button>
+//                                         </div>
+//                                     ))}
+//                                 </div>
+//                             )}
+//                         </CardContent>
+//                     </>
+//                 )}
+//             </Card>
+//         </div>
+//     );
+// }
+
+
 "use client";
 
 import { useEffect, useState } from 'react';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
 import { formatBytes } from "@/utils/format";
-import { Download, File as FileIcon, Loader2, Package, AlertTriangle, XCircle } from "lucide-react";
+import { Download, File as FileIcon, Loader2, Package, AlertTriangle, Hourglass, FolderDown } from "lucide-react";
 import { toast } from "sonner";
 import { usePathname } from 'next/navigation';
-import { Zip, ZipPassThrough } from 'fflate'; 
 import { saveAs } from 'file-saver';
 
 interface FileMetadata {
@@ -1840,14 +2477,6 @@ interface FileMetadata {
     thumbnail: string | null;
 }
 
-interface ZipProgressState {
-    totalFiles: number;
-    completedFiles: number;
-    currentFileName: string;
-    overallPercentage: number;
-    currentFilePercentage: number;
-}
-
 export default function DownloadGroupPage() {
     const pathname = usePathname();
     const groupId = pathname.split('/').pop();
@@ -1855,14 +2484,8 @@ export default function DownloadGroupPage() {
     const [files, setFiles] = useState<FileMetadata[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>();
-    
-    const [isZipping, setIsZipping] = useState(false);
-    const [zipProgress, setZipProgress] = useState<ZipProgressState>({
-        totalFiles: 0, completedFiles: 0, currentFileName: '', overallPercentage: 0, currentFilePercentage: 0
-    });
-    const [abortController, setAbortController] = useState<AbortController | null>(null);
+    const [isDownloading, setIsDownloading] = useState<string | null>(null);
 
-    // --- FIX: Get the backend URL directly from environment variables ---
     const backendApiUrl = process.env.NEXT_PUBLIC_API_URL;
 
     useEffect(() => {
@@ -1871,11 +2494,11 @@ export default function DownloadGroupPage() {
             setIsLoading(false);
             return;
         }
-        // Use the local API proxy for metadata, as it's a fast request and avoids CORS issues if any.
+        
         const fetchGroupMetadata = async () => {
             setIsLoading(true);
             try {
-                const res = await fetch(`/api/files/group-meta/${groupId}`); // This can still use the proxy
+                const res = await fetch(`/api/files/group-meta/${groupId}`);
                 if (!res.ok) {
                     const errorData = await res.json().catch(() => ({ message: "File group not found or has expired." }));
                     throw new Error(errorData.message);
@@ -1886,138 +2509,63 @@ export default function DownloadGroupPage() {
                 }
                 setFiles(data);
             } catch (err) {
-                const error = err as Error;
-                setError(error.message);
+                setError((err as Error).message);
             } finally {
                 setIsLoading(false);
             }
         };
+
         fetchGroupMetadata();
     }, [groupId]);
 
-    const handleDownload = (file: FileMetadata) => {
-        // --- FIX: Point the download directly to the EC2 backend ---
-        if (!backendApiUrl) { 
-            toast.error("Backend API URL is not configured. Cannot start download."); 
-            return; 
+    const handleDownload = async (file: FileMetadata) => {
+        if (!backendApiUrl) {
+            toast.error("Backend API URL is not configured.");
+            return;
         }
-        try {
-            toast.info(`Your download for ${file.originalName} has started.`);
-            
-            // Construct the URL to point DIRECTLY to the EC2 backend API
-            const downloadUrl = `${backendApiUrl}/files/download/${file.uniqueId}`;
-            
-            // We use a link to initiate the download, as this is the standard browser behavior
-            const link = document.createElement('a');
-            link.href = downloadUrl;
-            // The 'download' attribute is a hint, but the Content-Disposition header from the server is what matters
-            link.setAttribute('download', file.originalName); 
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            
-        } catch (err) {
-            const error = err as Error;
-            toast.error(`Failed to start download for ${file.originalName}`, { description: error.message });
-        }
-    };
-    
-    const handleCancelZip = () => {
-        if (abortController) {
-            abortController.abort();
-            toast.warning("Download All operation has been cancelled.");
-        }
-        setIsZipping(false);
-    };
-
-    const handleDownloadAllAsZip = async () => {
-        if (files.length === 0 || isZipping || !backendApiUrl) return;
-
-        setIsZipping(true);
-        const controller = new AbortController();
-        setAbortController(controller);
-
-        const zip = new Zip();
-        const zipFileName = `${files[0].originalName.split('.')[0] || 'archive'}.zip`;
         
-        const zipChunks: Uint8Array[] = [];
-        zip.ondata = (err, data, final) => {
-            if (err) {
-                setIsZipping(false);
-                toast.error("Error during zipping", { description: err.message });
-                throw err;
-            }
-            zipChunks.push(data);
-            if (final) {
-                const zipBlob = new Blob(zipChunks, { type: 'application/zip' });
-                saveAs(zipBlob, zipFileName);
-                setIsZipping(false);
-                toast.success("ZIP file created successfully!");
-            }
-        };
-
-        toast.info("Starting download and zip process...");
-
+        setIsDownloading(file.uniqueId);
+        const downloadToast = toast.loading(`Preparing download for ${file.originalName}...`);
+        
         try {
-            for (let i = 0; i < files.length; i++) {
-                const file = files[i];
-                
-                setZipProgress({
-                    totalFiles: files.length,
-                    completedFiles: i,
-                    currentFileName: file.originalName,
-                    overallPercentage: Math.round((i / files.length) * 100),
-                    currentFilePercentage: 0,
-                });
+            const downloadUrl = `${backendApiUrl}/files/download/${file.uniqueId}`;
+            const response = await fetch(downloadUrl);
 
-                // --- FIX: Point the download for zipping directly to the EC2 backend ---
-                const downloadUrl = `${backendApiUrl}/files/download/${file.uniqueId}`;
-                const response = await fetch(downloadUrl, { signal: controller.signal });
-
-                if (!response.ok || !response.body) {
-                    throw new Error(`Failed to start download for ${file.originalName}`);
-                }
-                
-                const fileStream = new ZipPassThrough(file.originalName);
-                fileStream.mtime = new Date();
-                zip.add(fileStream);
-
-                const reader = response.body.getReader();
-                let downloadedBytes = 0;
-                
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    
-                    fileStream.push(value);
-                    downloadedBytes += value.length;
-
-                    setZipProgress(currentProgress => ({
-                        ...currentProgress,
-                        currentFilePercentage: (downloadedBytes / file.size) * 100,
-                    }));
-                }
-                
-                fileStream.push(new Uint8Array(0), true);
+            if (response.ok) {
+                toast.success(`Download starting for ${file.originalName}`, { id: downloadToast });
+                const blob = await response.blob();
+                saveAs(blob, file.originalName);
+            } else {
+                const errorData = await response.json();
+                toast.error(errorData.message || 'Could not start download.', { id: downloadToast });
             }
-            
-            setZipProgress(currentProgress => ({ ...currentProgress, completedFiles: files.length, overallPercentage: 100, currentFilePercentage: 100 }));
-            zip.end();
-
         } catch (err) {
-            if ((err as Error).name !== 'AbortError') {
-                toast.error("Download failed", { description: (err as Error).message });
-            }
-            setIsZipping(false);
+            toast.error('An unexpected error occurred.', { id: downloadToast, description: (err as Error).message });
+        } finally {
+            setIsDownloading(null);
         }
     };
 
-    // The rest of the JSX rendering remains the same, as it calls these updated handlers.
+    // ✅ New function to handle downloading all files
+    const handleDownloadAll = () => {
+        if (files.length === 0) return;
+
+        toast.info(`Starting download for all ${files.length} files. Your browser may ask for permission.`);
+
+        files.forEach((file, index) => {
+            // Stagger the downloads to prevent the browser from blocking them
+            setTimeout(() => {
+                // We don't need to await this, just trigger it
+                handleDownload(file);
+            }, index * 500); // 500ms delay between each download start
+        });
+    };
+
     return (
-        <div className="flex min-h-screen items-center justify-center bg-gray-50 dark:bg-gray-900 p-4">
+        <div className="flex min-h-screen items-center justify-center bg-gray-50 p-4">
             <Card className="w-full max-w-lg">
                 {error ? (
-                     <CardHeader>
+                    <CardHeader>
                         <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-red-100">
                             <AlertTriangle className="h-6 w-6 text-red-600" />
                         </div>
@@ -2028,8 +2576,10 @@ export default function DownloadGroupPage() {
                     <>
                         <CardHeader>
                             <CardTitle className="flex items-center gap-2 text-2xl"><Package size={28} /> File Batch Ready</CardTitle>
-                            {isLoading ? (<CardDescription>Fetching file details...</CardDescription>) : (
-                                <CardDescription>This link contains {files.length} file(s) with a total size of {formatBytes(files.reduce((acc, file) => acc + file.size, 0))}.</CardDescription>
+                            {isLoading ? (
+                                <CardDescription>Fetching file details...</CardDescription>
+                            ) : (
+                                <CardDescription>This link contains {files.length} file(s) with a total size of {formatBytes(files.reduce((acc, f) => acc + f.size, 0))}.</CardDescription>
                             )}
                         </CardHeader>
                         <CardContent className="space-y-4">
@@ -2037,44 +2587,33 @@ export default function DownloadGroupPage() {
                                 <div className="flex justify-center items-center h-48"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>
                             ) : (
                                 <>
-                                    <div className="space-y-2 max-h-72 overflow-y-auto rounded-md border p-2">
+                                    <div className="space-y-2 max-h-60 overflow-y-auto rounded-md border p-2">
                                         {files.map(file => (
                                             <div key={file.uniqueId} className="flex items-center justify-between p-2 hover:bg-muted/50 rounded-md transition-colors">
                                                 <div className="flex items-center gap-3 overflow-hidden">
-                                                     {file.thumbnail ? (<img src={`data:image/jpeg;base64,${file.thumbnail}`} alt="preview" className="h-10 w-10 flex-shrink-0 rounded-sm object-cover bg-gray-200" />) : (
-                                                        <div className="h-10 w-10 flex-shrink-0 rounded-sm bg-gray-100 flex items-center justify-center"><FileIcon className="h-5 w-5 text-gray-500" /></div>
-                                                     )}
+                                                    <div className="h-10 w-10 flex-shrink-0 rounded-sm bg-gray-100 flex items-center justify-center"><FileIcon className="h-5 w-5 text-gray-500" /></div>
                                                     <div className='overflow-hidden'>
                                                         <p className="font-medium text-sm truncate" title={file.originalName}>{file.originalName}</p>
                                                         <p className="text-xs text-muted-foreground">{formatBytes(file.size)}</p>
                                                     </div>
                                                 </div>
-                                                <Button size="sm" variant="ghost" onClick={() => handleDownload(file)} disabled={isZipping}><Download className="h-4 w-4" /></Button>
+                                                <Button size="sm" variant="ghost" onClick={() => handleDownload(file)} disabled={!!isDownloading}>
+                                                    {isDownloading === file.uniqueId ? <Hourglass className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                                                </Button>
                                             </div>
                                         ))}
                                     </div>
                                     
+                                    {/* ✅ "Download All" button */}
                                     {files.length > 1 && (
-                                        <>
-                                            {isZipping ? (
-                                                <div className="p-4 border rounded-lg bg-muted/50 space-y-3">
-                                                    <div className="flex justify-between items-center">
-                                                        <p className="font-semibold text-sm">Processing Files...</p>
-                                                        <Button variant="ghost" size="sm" onClick={handleCancelZip}><XCircle className="h-4 w-4 mr-2" />Cancel</Button>
-                                                    </div>
-                                                    <div className='space-y-1'>
-                                                        <p className='text-xs font-medium text-muted-foreground'>Overall Progress ({zipProgress.completedFiles} / {zipProgress.totalFiles})</p>
-                                                        <Progress value={zipProgress.overallPercentage} />
-                                                    </div>
-                                                    <div className='space-y-1'>
-                                                        <p className="text-xs font-medium text-muted-foreground truncate" title={zipProgress.currentFileName}>Current: {zipProgress.currentFileName}</p>
-                                                        <Progress value={zipProgress.currentFilePercentage} className="h-1.5" />
-                                                    </div>
-                                                </div>
-                                            ) : (
-                                                <Button className="w-full h-12 text-md" onClick={handleDownloadAllAsZip}><Package className="mr-2 h-5 w-5" />Download All as .ZIP</Button>
-                                            )}
-                                        </>
+                                        <Button 
+                                            className="w-full h-12 text-md" 
+                                            onClick={handleDownloadAll} 
+                                            disabled={!!isDownloading}
+                                        >
+                                            <FolderDown className="mr-2 h-5 w-5" />
+                                            Download All ({files.length})
+                                        </Button>
                                     )}
                                 </>
                             )}
