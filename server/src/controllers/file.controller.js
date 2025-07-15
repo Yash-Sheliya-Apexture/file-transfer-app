@@ -5087,7 +5087,7 @@
 const File = require('../models/File');
 const gDriveService = require('../services/googleDrive.service');
 const telegramService = require('../services/telegram.service');
-const mtpService = require('../services/mtp.service.js');
+// const mtpService = require('../services/mtp.service.js');
 const fs = require('fs');
 const path = require('path');
 const sanitize = require("sanitize-filename");
@@ -5298,27 +5298,27 @@ const downloadFile = async (req, res, next) => {
         if (!file) {
             return res.status(404).json({ message: 'File not found.' });
         }
+        if (file.status === 'ERROR') {
+            return res.status(500).json({ message: 'This file is corrupted.' });
+        }
 
         res.setHeader('Content-Disposition', `attachment; filename="${file.originalName}"`);
         res.setHeader('Content-Type', 'application/octet-stream');
         res.setHeader('Content-Length', file.size);
 
-        // --- Case 1: File is temporarily in Google Drive ---
+        // --- Case 1: File is in Google Drive ---
         if (file.status === 'IN_DRIVE' || file.status === 'ARCHIVING') {
             const gDriveStream = await gDriveService.getFileStream(file.gDriveFileId);
-            gDriveStream.pipe(res).on('error', (err) => {
-                console.error('Google Drive stream error:', err);
-                if (!res.headersSent) {
-                    res.status(500).send('Failed to stream file from Google Drive.');
-                }
+            gDriveStream.pipe(res).on('error', () => {
+                if (!res.headersSent) res.status(500).send('Failed to stream file.');
             });
             return;
         }
 
-        // --- Case 2: File is archived in Telegram (using MTP API) ---
+        // --- Case 2: File is in Telegram (using Bot API) ---
         if (file.status === 'IN_TELEGRAM') {
             if (!file.telegramChunks || file.telegramChunks.length === 0) {
-                return res.status(500).end('File location data is missing or corrupt.');
+                return res.status(500).end('File location data is missing.');
             }
 
             const sortedChunks = file.telegramChunks.sort((a, b) => a.order - b.order);
@@ -5326,26 +5326,27 @@ const downloadFile = async (req, res, next) => {
             // Sequentially stream each chunk to the user
             for (const chunk of sortedChunks) {
                 const location = chunk.locations[0]; // Use the first replica
-                if (!location || !location.channelId) {
-                    throw new Error(`Chunk ${chunk.order} is missing location or channel data.`);
+                const botToken = botConfig.find(b => b.id === location.botId)?.token;
+
+                if (!botToken) {
+                    throw new Error(`Bot token not found for botId: ${location.botId}`);
                 }
+
+                const chunkStream = await telegramService.getFileStream(location.fileId, botToken);
                 
-                const chunkStream = await mtpService.getDownloadStream(location.messageId, location.channelId);
-                
-                // Pipe the current chunk and wait for it to finish before starting the next one.
+                // Pipe the current chunk and wait for it to finish
                 await new Promise((resolve, reject) => {
-                    chunkStream.pipe(res, { end: false }); // `end: false` is crucial here
+                    chunkStream.pipe(res, { end: false }); // `end: false` is crucial
                     chunkStream.on('end', resolve);
                     chunkStream.on('error', reject);
                 });
             }
 
-            res.end(); // Manually end the response after all chunks have been streamed.
+            res.end(); // Manually end the response after all chunks
             return;
         }
 
-        res.status(400).end('File is not in a downloadable state.');
-
+        res.status(400).end('File not in a downloadable state.');
     } catch (error) {
         console.error(`[DOWNLOAD-ERROR] for ${req.params.uniqueId}:`, error);
         if (!res.headersSent) {
